@@ -2,6 +2,7 @@ import { act, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { App } from "./App";
 import { GameEngine } from "../game/GameEngine";
+import { StrictMode } from "react";
 
 vi.mock("../render/PixiRenderer", () => ({
   PixiRenderer: {
@@ -29,6 +30,16 @@ describe("App home screen", () => {
     ).toBeEnabled();
     expect(screen.getByRole("button", { name: "GARAGE" })).toBeEnabled();
     expect(screen.getByRole("button", { name: "SETTINGS" })).toBeEnabled();
+  });
+
+  it("keeps the engine live through the Strict Mode effect probe", async () => {
+    const user = userEvent.setup();
+    const engine = new GameEngine({ seed: 3 });
+    render(<StrictMode><App engine={engine} /></StrictMode>);
+
+    await user.click(screen.getByRole("button", { name: "START EXPEDITION" }));
+
+    expect(engine.getSnapshot().phase).toBe("RUNNING");
   });
 
   it("persists a completed-run award and Garage purchase across an app rebuild", async () => {

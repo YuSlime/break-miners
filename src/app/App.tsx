@@ -68,6 +68,7 @@ export function App({ engine: providedEngine }: AppProps = {}): ReactElement {
   >("IDLE");
   const [rendererRetry, setRendererRetry] = useState(0);
   const awardedResults = useRef(new Set<string>());
+  const lifecycleGeneration = useRef(0);
   const setTouchVector = useCallback(
     (x: number, y: number) => inputController.setTouchVector(x, y),
     [inputController],
@@ -152,6 +153,7 @@ export function App({ engine: providedEngine }: AppProps = {}): ReactElement {
   }, [audio, saveData.settings]);
 
   useEffect(() => {
+    const generation = ++lifecycleGeneration.current;
     const handleVisibilityChange = () => {
       engine.setDocumentHidden(document.hidden);
     };
@@ -194,8 +196,11 @@ export function App({ engine: providedEngine }: AppProps = {}): ReactElement {
       document.removeEventListener("visibilitychange", handleVisibilityChange);
       if (frameId !== undefined) cancelAnimationFrame(frameId);
       keyboard.destroy();
-      audio.destroy();
-      engine.destroy();
+      queueMicrotask(() => {
+        if (lifecycleGeneration.current !== generation) return;
+        audio.destroy();
+        engine.destroy();
+      });
     };
   }, [audio, engine, inputController]);
 

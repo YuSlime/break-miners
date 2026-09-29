@@ -34,6 +34,8 @@ export interface GameEngineOptions {
   permanentUpgrades?: Partial<Record<PermanentUpgradeId, number>>;
   records?: Readonly<RunRecords>;
   completedRuns?: number;
+  startingDepthMeters?: number;
+  baseDrillPower?: number;
 }
 
 export interface PlayerRenderState {
@@ -126,6 +128,8 @@ export class GameEngine {
   #coreBonusMultiplier = 1;
   #records: Readonly<RunRecords>;
   #firstCompletedRun: boolean;
+  readonly #startingDepthMeters: number;
+  readonly #configuredDrillPower: number;
 
   constructor(options: GameEngineOptions = {}) {
     this.#runDurationSeconds =
@@ -139,6 +143,14 @@ export class GameEngine {
       mostBlocksBroken: 0,
     };
     this.#firstCompletedRun = (options.completedRuns ?? 0) === 0;
+    this.#startingDepthMeters = Math.max(
+      0,
+      Math.floor(options.startingDepthMeters ?? 0),
+    );
+    this.#configuredDrillPower = Math.max(
+      1,
+      options.baseDrillPower ?? BASE_RUN_STATS.drillPower,
+    );
     this.#applyPermanentProgression();
     this.#startingBreakGauge = Math.max(
       0,
@@ -168,17 +180,28 @@ export class GameEngine {
           new WorldGenerator(this.#seed),
           BALANCE.activeChunkRadius,
         );
-        this.#world.updateActiveSet({ x: 0, y: 0 });
+        const startingTileY = this.#startingDepthMeters;
+        this.#world.updateActiveSet({
+          x: 0,
+          y: startingTileY * BALANCE.tileSize,
+        });
         const surfaceChunk = this.#world
           .getActiveChunks()
           .find(
-            (chunk) => chunk.coordinate.x === 0 && chunk.coordinate.y === 0,
+            (chunk) =>
+              chunk.coordinate.x === 0 &&
+              chunk.coordinate.y ===
+                Math.floor(startingTileY / BALANCE.chunkHeightTiles),
           );
-        const routeColumn = surfaceChunk?.routeColumns[0] ?? 10;
+        const routeColumn =
+          surfaceChunk?.routeColumns[
+            (startingTileY > 0 ? startingTileY + 1 : startingTileY) %
+              BALANCE.chunkHeightTiles
+          ] ?? 10;
         this.#player = new PlayerSystem({
           position: {
             x: routeColumn * BALANCE.tileSize + BALANCE.tileSize / 2,
-            y: BALANCE.tileSize / 2,
+            y: startingTileY * BALANCE.tileSize + BALANCE.tileSize / 2,
           },
           moveSpeed: 100,
           radius: 10,
@@ -318,6 +341,8 @@ export class GameEngine {
   }
 
   getSnapshot = (): Readonly<UISnapshot> => this.#snapshot;
+
+  getRunBuild = () => this.#upgrades?.getBuild() ?? Object.freeze({});
 
   setPermanentProgression(
     upgrades: Readonly<Partial<Record<PermanentUpgradeId, number>>>,
@@ -660,7 +685,7 @@ export class GameEngine {
     this.#baseRunStats = {
       ...BASE_RUN_STATS,
       drillPower:
-        BASE_RUN_STATS.drillPower *
+        this.#configuredDrillPower *
         (1 + level("drill_power") * PERMANENT_UPGRADES.drill_power.valuePerLevel),
       moveSpeedMultiplier:
         BASE_RUN_STATS.moveSpeedMultiplier *

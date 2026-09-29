@@ -3,6 +3,8 @@ import type { UISnapshot } from "../game/gameTypes";
 import { HUD } from "./HUD";
 import { UpgradeModal } from "./UpgradeModal";
 import { ResultScreen } from "./ResultScreen";
+import { GarageScreen } from "./GarageScreen";
+import { createDefaultSave } from "../save/SaveSchema";
 
 const snapshot: UISnapshot = {
   phase: "RUNNING",
@@ -108,5 +110,28 @@ describe("ResultScreen", () => {
     expect(screen.getByRole("button", { name: "PLAY AGAIN" })).toBeEnabled();
     expect(screen.getByRole("button", { name: "GARAGE" })).toBeEnabled();
     expect(screen.getByRole("button", { name: "HOME" })).toBeEnabled();
+  });
+});
+
+describe("GarageScreen", () => {
+  it("shows levels, effects, prices, affordability, and cap state", () => {
+    render(
+      <GarageScreen
+        onBack={() => undefined}
+        onPurchase={() => undefined}
+        save={{
+          ...createDefaultSave(),
+          credits: 10,
+          upgrades: { drill_power: 20 },
+        }}
+      />,
+    );
+
+    expect(screen.getByRole("heading", { name: "GARAGE" })).toBeVisible();
+    expect(screen.getByText("10 CREDITS", { selector: ".garage-header strong" })).toBeVisible();
+    expect(screen.getByText("Lv 20 / 20")).toBeVisible();
+    expect(screen.getByRole("button", { name: "DRILL POWER MAX" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: /MOVE SPEED 10 CREDITS/ })).toBeEnabled();
+    expect(screen.getByRole("button", { name: /CRIT CHANCE 14 CREDITS/ })).toBeDisabled();
   });
 });

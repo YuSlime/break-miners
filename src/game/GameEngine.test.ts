@@ -206,4 +206,14 @@ describe("GameEngine clock", () => {
     });
     expect(engine.getRenderState().seed).not.toBe(firstSeed);
   });
+
+  it("injects permanent Starting XP into the next run", () => {
+    const engine = new GameEngine({
+      seed: 5,
+      permanentUpgrades: { starting_xp: 7 },
+    });
+    engine.dispatch({ type: "START_RUN" });
+
+    expect(engine.getSnapshot()).toMatchObject({ level: 2, xp: 0 });
+  });
 });

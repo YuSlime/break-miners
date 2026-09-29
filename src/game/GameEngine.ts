@@ -19,6 +19,11 @@ import type { BaseRunStats } from "../upgrades/UpgradeEffects";
 import type { GameCommand, UISnapshot, Vec2, VisualEvent } from "./gameTypes";
 import { FixedStepLoop } from "./FixedStepLoop";
 import { RunSystem } from "../run/RunSystem";
+import {
+  PERMANENT_UPGRADES,
+  type PermanentUpgradeId,
+} from "../data/permanentUpgrades";
+import type { RunRecords } from "../run/resultTypes";
 
 export interface GameEngineOptions {
   seed?: number | string;
@@ -26,6 +31,9 @@ export interface GameEngineOptions {
   now?: () => number;
   startingXp?: number;
   startingBreakGauge?: number;
+  permanentUpgrades?: Partial<Record<PermanentUpgradeId, number>>;
+  records?: Readonly<RunRecords>;
+  completedRuns?: number;
 }
 
 export interface PlayerRenderState {
@@ -87,7 +95,8 @@ const BASE_RUN_STATS: BaseRunStats = {
 
 export class GameEngine {
   readonly #runDurationSeconds: number;
-  readonly #startingXp: number;
+  #startingXp: number;
+  readonly #configuredStartingXp: number;
   readonly #startingBreakGauge: number;
   readonly #loop: FixedStepLoop;
   readonly #listeners = new Set<() => void>();
@@ -111,11 +120,26 @@ export class GameEngine {
   #runSystem: RunSystem | undefined;
   readonly #seedFactory: () => number;
   #replayIndex = 0;
+  #permanentUpgrades: Partial<Record<PermanentUpgradeId, number>>;
+  #baseRunStats: BaseRunStats = { ...BASE_RUN_STATS };
+  #luck = 0;
+  #coreBonusMultiplier = 1;
+  #records: Readonly<RunRecords>;
+  #firstCompletedRun: boolean;
 
   constructor(options: GameEngineOptions = {}) {
     this.#runDurationSeconds =
       options.runDurationSeconds ?? BALANCE.runDurationSeconds;
-    this.#startingXp = Math.max(0, options.startingXp ?? 0);
+    this.#configuredStartingXp = Math.max(0, options.startingXp ?? 0);
+    this.#startingXp = this.#configuredStartingXp;
+    this.#permanentUpgrades = { ...(options.permanentUpgrades ?? {}) };
+    this.#records = options.records ?? {
+      deepestMeters: 0,
+      bestCombo: 0,
+      mostBlocksBroken: 0,
+    };
+    this.#firstCompletedRun = (options.completedRuns ?? 0) === 0;
+    this.#applyPermanentProgression();
     this.#startingBreakGauge = Math.max(
       0,
       Math.min(100, options.startingBreakGauge ?? 0),
@@ -175,7 +199,8 @@ export class GameEngine {
         this.#runSystem = new RunSystem({
           durationSeconds: this.#runDurationSeconds,
           seed: this.#seed,
-          firstCompletedRun: true,
+          firstCompletedRun: this.#firstCompletedRun,
+          records: this.#records,
         });
         this.#breakPipeline.clear();
         this.#combo.reset();
@@ -255,7 +280,7 @@ export class GameEngine {
       case "REROLL_UPGRADES":
         if (this.#snapshot.phase === "LEVEL_UP" && this.#upgrades) {
           const result = this.#upgrades.reroll({
-            luck: 0,
+            luck: this.#luck,
             elapsedRunSeconds:
               this.#runDurationSeconds - this.#snapshot.timeRemainingSeconds,
           });
@@ -293,6 +318,26 @@ export class GameEngine {
   }
 
   getSnapshot = (): Readonly<UISnapshot> => this.#snapshot;
+
+  setPermanentProgression(
+    upgrades: Readonly<Partial<Record<PermanentUpgradeId, number>>>,
+  ): void {
+    if (this.#snapshot.phase !== "MENU" && this.#snapshot.phase !== "RESULT") return;
+    this.#permanentUpgrades = { ...upgrades };
+    this.#applyPermanentProgression();
+  }
+
+  setPersistentRunContext(context: {
+    upgrades: Readonly<Partial<Record<PermanentUpgradeId, number>>>;
+    records: Readonly<RunRecords>;
+    completedRuns: number;
+  }): void {
+    if (this.#snapshot.phase !== "MENU" && this.#snapshot.phase !== "RESULT") return;
+    this.#permanentUpgrades = { ...context.upgrades };
+    this.#records = { ...context.records };
+    this.#firstCompletedRun = context.completedRuns === 0;
+    this.#applyPermanentProgression();
+  }
 
   getRenderState(): Readonly<EngineRenderState> {
     const activeChunks = this.#world?.getActiveChunks() ?? [];
@@ -360,8 +405,8 @@ export class GameEngine {
     const breakTimeStep = this.#breakTime.step(dt);
     if (breakTimeStep.ended) this.#visualEvents.push({ type: "BREAK_TIME_END" });
     if (this.#world && this.#player && this.#damage) {
-      const derivedStats = this.#upgrades?.getDerivedStats(BASE_RUN_STATS) ?? {
-        ...BASE_RUN_STATS,
+      const derivedStats = this.#upgrades?.getDerivedStats(this.#baseRunStats) ?? {
+        ...this.#baseRunStats,
         piercingChance: 0,
         multiBombChance: 0,
         clusterBombs: 0,
@@ -483,10 +528,13 @@ export class GameEngine {
               request.block.type === "CORE_GATE" &&
               this.#runSystem?.recordCoreDestroyed({
                 depthMeters: request.block.tileY,
-                coreShards: 1,
+                coreShards: Math.max(1, Math.round(this.#coreBonusMultiplier)),
               })
             ) {
-              coreShardsAwarded += 1;
+              coreShardsAwarded += Math.max(
+                1,
+                Math.round(this.#coreBonusMultiplier),
+              );
               this.#visualEvents.push({
                 type: "CORE_GATE_DESTROYED",
                 position: {
@@ -548,7 +596,7 @@ export class GameEngine {
     if (phase !== "RESULT" && levelProgress?.leveledUp && this.#upgrades) {
       phase = "LEVEL_UP";
       upgradeChoices = this.#upgrades.createChoices({
-        luck: 0,
+        luck: this.#luck,
         elapsedRunSeconds: this.#runDurationSeconds - timeRemainingSeconds,
       });
       rerollsRemaining = this.#upgrades.getProgress().rerollsRemaining;
@@ -605,5 +653,30 @@ export class GameEngine {
       coreShards: result?.coreShards ?? this.#snapshot.coreShards,
     });
     if (publish) this.#publish();
+  }
+
+  #applyPermanentProgression(): void {
+    const level = (id: PermanentUpgradeId) => this.#permanentUpgrades[id] ?? 0;
+    this.#baseRunStats = {
+      ...BASE_RUN_STATS,
+      drillPower:
+        BASE_RUN_STATS.drillPower *
+        (1 + level("drill_power") * PERMANENT_UPGRADES.drill_power.valuePerLevel),
+      moveSpeedMultiplier:
+        BASE_RUN_STATS.moveSpeedMultiplier *
+        (1 + level("move_speed") * PERMANENT_UPGRADES.move_speed.valuePerLevel),
+      criticalChance:
+        BASE_RUN_STATS.criticalChance +
+        level("crit_chance") * PERMANENT_UPGRADES.crit_chance.valuePerLevel,
+      criticalMultiplier:
+        BASE_RUN_STATS.criticalMultiplier +
+        level("crit_damage") * PERMANENT_UPGRADES.crit_damage.valuePerLevel,
+    };
+    this.#luck = level("luck") * PERMANENT_UPGRADES.luck.valuePerLevel;
+    this.#coreBonusMultiplier =
+      1 + level("core_bonus") * PERMANENT_UPGRADES.core_bonus.valuePerLevel;
+    this.#startingXp =
+      this.#configuredStartingXp +
+      level("starting_xp") * PERMANENT_UPGRADES.starting_xp.valuePerLevel;
   }
 }

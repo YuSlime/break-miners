@@ -1,5 +1,20 @@
-import { render, screen } from "@testing-library/react";
+import { act, render, screen } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { App } from "./App";
+import { GameEngine } from "../game/GameEngine";
+
+vi.mock("../render/PixiRenderer", () => ({
+  PixiRenderer: {
+    create: vi.fn().mockResolvedValue({
+      consumeVisualEvents: vi.fn(),
+      destroy: vi.fn(),
+      render: vi.fn(),
+      resize: vi.fn(),
+    }),
+  },
+}));
+
+beforeEach(() => localStorage.clear());
 
 describe("App home screen", () => {
   it("offers the primary expedition and progression actions", () => {
@@ -13,5 +28,23 @@ describe("App home screen", () => {
     ).toBeEnabled();
     expect(screen.getByRole("button", { name: "GARAGE" })).toBeEnabled();
     expect(screen.getByRole("button", { name: "SETTINGS" })).toBeEnabled();
+  });
+
+  it("persists a completed-run award and Garage purchase across an app rebuild", async () => {
+    const user = userEvent.setup();
+    const engine = new GameEngine({ seed: 9, runDurationSeconds: 1 / 60 });
+    const first = render(<App engine={engine} />);
+    await user.click(screen.getByRole("button", { name: "START EXPEDITION" }));
+    act(() => engine.advance(1 / 60));
+    expect(await screen.findByText("+10 CREDITS")).toBeVisible();
+    await user.click(screen.getByRole("button", { name: "GARAGE" }));
+    await user.click(screen.getByRole("button", { name: "DRILL POWER 10 CREDITS" }));
+    expect(screen.getByText("Lv 1 / 20")).toBeVisible();
+    first.unmount();
+
+    render(<App />);
+    await user.click(screen.getByRole("button", { name: "GARAGE" }));
+    expect(screen.getByText("Lv 1 / 20")).toBeVisible();
+    expect(screen.getByText("0 CREDITS", { selector: ".garage-header strong" })).toBeVisible();
   });
 });

@@ -6,10 +6,36 @@ import { HUD } from "../ui/HUD";
 import { UpgradeModal } from "../ui/UpgradeModal";
 import { ResultScreen } from "../ui/ResultScreen";
 import { useEngineSnapshot } from "./useEngineSnapshot";
+import { SaveManager } from "../save/SaveManager";
+import type { SaveData } from "../save/saveTypes";
+import {
+  purchasePermanentUpgrade,
+  type PermanentUpgradeId,
+} from "../data/permanentUpgrades";
+import { GarageScreen } from "../ui/GarageScreen";
 import "../styles/app.css";
 
-export function App(): ReactElement {
-  const [engine] = useState(() => new GameEngine());
+export interface AppProps {
+  engine?: GameEngine;
+}
+
+export function App({ engine: providedEngine }: AppProps = {}): ReactElement {
+  const [saveManager] = useState(() => new SaveManager(window.localStorage));
+  const [initialLoad] = useState(() => saveManager.load());
+  const [saveData, setSaveData] = useState<SaveData>(initialLoad.data);
+  const saveDataRef = useRef(saveData);
+  saveDataRef.current = saveData;
+  const [saveWarning, setSaveWarning] = useState(initialLoad.warning ?? "");
+  const [garageOpen, setGarageOpen] = useState(false);
+  const [engine] = useState(
+    () =>
+      providedEngine ??
+      new GameEngine({
+          permanentUpgrades: initialLoad.data.upgrades,
+          records: initialLoad.data.records,
+          completedRuns: initialLoad.data.completedRuns,
+        }),
+  );
   const snapshot = useEngineSnapshot(engine);
   const canvasHostRef = useRef<HTMLDivElement>(null);
   const rendererRef = useRef<PixiRenderer | undefined>(undefined);
@@ -17,6 +43,62 @@ export function App(): ReactElement {
     "IDLE" | "LOADING" | "READY" | "ERROR"
   >("IDLE");
   const [rendererRetry, setRendererRetry] = useState(0);
+  const awardedResults = useRef(new Set<string>());
+
+  useEffect(() => {
+    const result = snapshot.result;
+    if (!result) return;
+    const resultKey = `${String(result.seed)}:${result.reason}`;
+    if (awardedResults.current.has(resultKey)) return;
+    awardedResults.current.add(resultKey);
+    setSaveData((current) => {
+      const records = {
+        deepestMeters: Math.max(current.records.deepestMeters, result.depthMeters),
+        bestCombo: Math.max(current.records.bestCombo, result.bestCombo),
+        mostBlocksBroken: Math.max(
+          current.records.mostBlocksBroken,
+          result.blocksBroken,
+        ),
+      };
+      const next: SaveData = {
+        ...current,
+        credits: current.credits + result.awardedCredits,
+        coreShards: current.coreShards + result.coreShards,
+        completedRuns: current.completedRuns + 1,
+        records,
+      };
+      const written = saveManager.save(next);
+      if (!written.ok) setSaveWarning("Progress is kept for this session but could not be saved.");
+      engine.setPersistentRunContext({
+        upgrades: written.data.upgrades,
+        records: written.data.records,
+        completedRuns: written.data.completedRuns,
+      });
+      return written.data;
+    });
+  }, [engine, saveManager, snapshot.result]);
+
+  useEffect(() => {
+    const saveOnPageHide = () => {
+      const written = saveManager.save(saveDataRef.current);
+      if (!written.ok) setSaveWarning("Progress is kept for this session but could not be saved.");
+    };
+    window.addEventListener("pagehide", saveOnPageHide);
+    return () => window.removeEventListener("pagehide", saveOnPageHide);
+  }, [saveManager]);
+
+  const purchase = (id: PermanentUpgradeId) => {
+    const result = purchasePermanentUpgrade(saveData, id);
+    if (!result.accepted) return;
+    const written = saveManager.save(result.data);
+    if (!written.ok) setSaveWarning("Purchase is active for this session but could not be saved.");
+    setSaveData(written.data);
+    engine.setPersistentRunContext({
+      upgrades: written.data.upgrades,
+      records: written.data.records,
+      completedRuns: written.data.completedRuns,
+    });
+  };
 
   useEffect(() => {
     const handleVisibilityChange = () => {
@@ -89,6 +171,16 @@ export function App(): ReactElement {
     };
   }, [rendererRetry, snapshot.phase]);
 
+  if (garageOpen && snapshot.phase === "MENU") {
+    return (
+      <GarageScreen
+        onBack={() => setGarageOpen(false)}
+        onPurchase={purchase}
+        save={saveData}
+      />
+    );
+  }
+
   if (snapshot.phase !== "MENU") {
     return (
       <main className="run-screen">
@@ -116,7 +208,10 @@ export function App(): ReactElement {
         )}
         {snapshot.phase === "RESULT" && snapshot.result && (
           <ResultScreen
-            onGarage={() => engine.dispatch({ type: "GO_HOME" })}
+            onGarage={() => {
+              engine.dispatch({ type: "GO_HOME" });
+              setGarageOpen(true);
+            }}
             onHome={() => engine.dispatch({ type: "GO_HOME" })}
             onPlayAgain={() => engine.dispatch({ type: "PLAY_AGAIN" })}
             result={snapshot.result}
@@ -143,6 +238,12 @@ export function App(): ReactElement {
     <main className="app-shell">
       <div className="ambient-grid" aria-hidden="true" />
       <section className="home-panel" aria-labelledby="game-title">
+        {saveWarning ? (
+          <aside className="save-warning" role="status">
+            {saveWarning}
+            <button onClick={() => setSaveWarning("")} type="button">DISMISS</button>
+          </aside>
+        ) : null}
         <p className="eyebrow">DEEP CORE EXPEDITION</p>
         <h1 id="game-title">BREAK MINERS</h1>
         <p className="tagline">
@@ -159,13 +260,14 @@ export function App(): ReactElement {
           <small id="start-expedition-description">DESCEND INTO THE MINE</small>
         </button>
         <nav className="home-actions" aria-label="Base facilities">
-          <button className="secondary-button" type="button">
+          <button className="secondary-button" onClick={() => setGarageOpen(true)} type="button">
             GARAGE
           </button>
           <button className="secondary-button" type="button">
             SETTINGS
           </button>
         </nav>
+        <p className="home-credits">{saveData.credits} CREDITS · {saveData.coreShards} CORE</p>
       </section>
     </main>
   );

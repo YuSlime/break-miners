@@ -61,4 +61,17 @@ describe("GameEngine clock", () => {
 
     expect(listener).not.toHaveBeenCalled();
   });
+
+  it("exposes active generated blocks and biome after a run starts", () => {
+    const engine = new GameEngine({ seed: "render-world" });
+
+    engine.dispatch({ type: "START_RUN" });
+    const renderState = engine.getRenderState();
+
+    expect(renderState.biome).toBe("STONE_CAVERN");
+    expect(renderState.blocks.length).toBeGreaterThan(0);
+    expect(renderState.blocks[0]).toEqual(
+      expect.objectContaining({ tileX: expect.any(Number), tileY: expect.any(Number) }),
+    );
+  });
 });

@@ -1,4 +1,8 @@
 import { BALANCE } from "../data/balance";
+import { BLOCK_DEFINITIONS } from "../data/blocks";
+import { ChunkManager } from "../world/ChunkManager";
+import { WorldGenerator } from "../world/WorldGenerator";
+import type { BiomeId, BlockType } from "../world/worldTypes";
 import type { GameCommand, UISnapshot, Vec2, VisualEvent } from "./gameTypes";
 import { FixedStepLoop } from "./FixedStepLoop";
 
@@ -12,11 +16,22 @@ export interface PlayerRenderState {
   position: Vec2;
 }
 
+export interface BlockRenderState {
+  id: string;
+  type: BlockType;
+  tileX: number;
+  tileY: number;
+  currentHp: number;
+  maxHp: number;
+  color: number;
+}
+
 export interface EngineRenderState {
   phase: UISnapshot["phase"];
   seed: number | string;
+  biome: BiomeId;
   player: PlayerRenderState;
-  blocks: readonly never[];
+  blocks: readonly BlockRenderState[];
   visualEvents: readonly VisualEvent[];
 }
 
@@ -39,6 +54,8 @@ export class GameEngine {
   readonly #listeners = new Set<() => void>();
   #seed: number | string;
   #snapshot: Readonly<UISnapshot>;
+  #world: ChunkManager | undefined;
+  readonly #playerPosition: Vec2 = { x: 0, y: 0 };
   #uiPublishAccumulator = 0;
   #destroyed = false;
 
@@ -63,6 +80,11 @@ export class GameEngine {
     switch (command.type) {
       case "START_RUN":
         this.#seed = command.seed ?? this.#seed;
+        this.#world = new ChunkManager(
+          new WorldGenerator(this.#seed),
+          BALANCE.activeChunkRadius,
+        );
+        this.#world.updateActiveSet(this.#playerPosition);
         this.#setSnapshot({
           ...INITIAL_SNAPSHOT,
           phase: "RUNNING",
@@ -105,11 +127,36 @@ export class GameEngine {
   getSnapshot = (): Readonly<UISnapshot> => this.#snapshot;
 
   getRenderState(): Readonly<EngineRenderState> {
+    const activeChunks = this.#world?.getActiveChunks() ?? [];
+    const blocks = activeChunks.flatMap((chunk) =>
+      chunk.blocks.flatMap((block) =>
+        block
+          ? [
+              Object.freeze({
+                id: block.id,
+                type: block.type,
+                tileX: block.tileX,
+                tileY: block.tileY,
+                currentHp: block.currentHp,
+                maxHp: block.maxHp,
+                color: BLOCK_DEFINITIONS[block.type].color,
+              }),
+            ]
+          : [],
+      ),
+    );
+    const biome =
+      activeChunks.find(
+        (chunk) => chunk.coordinate.x === 0 && chunk.coordinate.y === 0,
+      )?.biome ?? "STONE_CAVERN";
     return Object.freeze({
       phase: this.#snapshot.phase,
       seed: this.#seed,
-      player: Object.freeze({ position: Object.freeze({ x: 0, y: 0 }) }),
-      blocks: Object.freeze([]),
+      biome,
+      player: Object.freeze({
+        position: Object.freeze({ ...this.#playerPosition }),
+      }),
+      blocks: Object.freeze(blocks),
       visualEvents: Object.freeze([]),
     });
   }

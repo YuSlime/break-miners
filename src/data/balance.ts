@@ -11,4 +11,13 @@ export const BALANCE = {
   tileSize: 32,
   chunkWidthTiles: 20,
   chunkHeightTiles: 12,
+  activeChunkRadius: 1,
+  biomeHpModifiers: {
+    STONE_CAVERN: 1,
+    CRYSTAL_MINE: 1.18,
+    MAGMA_CORE: 1.4,
+    ANCIENT_RUINS: 1.7,
+    CYBER_DEPTHS: 2.05,
+    THE_VOID: 2.5,
+  },
 } as const;

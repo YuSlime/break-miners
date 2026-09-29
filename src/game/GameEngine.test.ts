@@ -74,4 +74,21 @@ describe("GameEngine clock", () => {
       expect.objectContaining({ tileX: expect.any(Number), tileY: expect.any(Number) }),
     );
   });
+
+  it("turns held movement into contact mining and block rewards", () => {
+    const engine = new GameEngine({ seed: "contact-mining" });
+    engine.dispatch({ type: "START_RUN" });
+    engine.dispatch({
+      type: "SET_INPUT",
+      input: { moveX: 1, moveY: 0, abilityPressed: false },
+    });
+
+    for (let step = 0; step < 180; step += 1) {
+      engine.advance(1 / 60);
+    }
+
+    expect(engine.getSnapshot().xp).toBeGreaterThan(0);
+    expect(engine.getSnapshot().runCoins).toBeGreaterThan(0);
+    expect(engine.getRenderState().player.position.x).toBeGreaterThan(0);
+  });
 });

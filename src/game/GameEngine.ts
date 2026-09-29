@@ -1,6 +1,11 @@
 import { BALANCE } from "../data/balance";
 import { BLOCK_DEFINITIONS } from "../data/blocks";
+import { BreakPipeline } from "../combat/BreakPipeline";
+import { DamageSystem } from "../combat/DamageSystem";
+import { MiningSystem } from "../player/MiningSystem";
+import { PlayerSystem } from "../player/PlayerSystem";
 import { ChunkManager } from "../world/ChunkManager";
+import { SeededRng } from "../world/SeededRng";
 import { WorldGenerator } from "../world/WorldGenerator";
 import type { BiomeId, BlockType } from "../world/worldTypes";
 import type { GameCommand, UISnapshot, Vec2, VisualEvent } from "./gameTypes";
@@ -55,7 +60,12 @@ export class GameEngine {
   #seed: number | string;
   #snapshot: Readonly<UISnapshot>;
   #world: ChunkManager | undefined;
-  readonly #playerPosition: Vec2 = { x: 0, y: 0 };
+  #player: PlayerSystem | undefined;
+  readonly #mining = new MiningSystem();
+  #damage: DamageSystem | undefined;
+  readonly #breakPipeline = new BreakPipeline();
+  #input = { moveX: 0, moveY: 0, abilityPressed: false };
+  #visualEvents: VisualEvent[] = [];
   #uiPublishAccumulator = 0;
   #destroyed = false;
 
@@ -84,7 +94,30 @@ export class GameEngine {
           new WorldGenerator(this.#seed),
           BALANCE.activeChunkRadius,
         );
-        this.#world.updateActiveSet(this.#playerPosition);
+        this.#world.updateActiveSet({ x: 0, y: 0 });
+        const surfaceChunk = this.#world
+          .getActiveChunks()
+          .find(
+            (chunk) => chunk.coordinate.x === 0 && chunk.coordinate.y === 0,
+          );
+        const routeColumn = surfaceChunk?.routeColumns[0] ?? 10;
+        this.#player = new PlayerSystem({
+          position: {
+            x: routeColumn * BALANCE.tileSize + BALANCE.tileSize / 2,
+            y: BALANCE.tileSize / 2,
+          },
+          moveSpeed: 100,
+          radius: 10,
+        });
+        this.#world.updateActiveSet(this.#player.getState().position);
+        this.#damage = new DamageSystem(
+          this.#world,
+          new SeededRng(this.#seed).fork("damage"),
+        );
+        this.#breakPipeline.clear();
+        this.#mining.resetTarget();
+        this.#input = { moveX: 0, moveY: 0, abilityPressed: false };
+        this.#visualEvents = [];
         this.#setSnapshot({
           ...INITIAL_SNAPSHOT,
           phase: "RUNNING",
@@ -112,6 +145,8 @@ export class GameEngine {
         this.#publish();
         break;
       case "SET_INPUT":
+        this.#input = { ...command.input };
+        break;
       case "SELECT_UPGRADE":
       case "REROLL_UPGRADES":
       case "SKIP_UPGRADE":
@@ -154,10 +189,12 @@ export class GameEngine {
       seed: this.#seed,
       biome,
       player: Object.freeze({
-        position: Object.freeze({ ...this.#playerPosition }),
+        position: Object.freeze({
+          ...(this.#player?.getState().position ?? { x: 0, y: 0 }),
+        }),
       }),
       blocks: Object.freeze(blocks),
-      visualEvents: Object.freeze([]),
+      visualEvents: Object.freeze([...this.#visualEvents]),
     });
   }
 
@@ -179,6 +216,66 @@ export class GameEngine {
 
   #step(dt: number): void {
     if (this.#snapshot.phase !== "RUNNING") return;
+
+    this.#visualEvents = [];
+    if (this.#world && this.#player && this.#damage) {
+      const playerStep = this.#player.step(dt, this.#input, this.#world);
+      const damageRequests = this.#mining.step(
+        dt,
+        playerStep.miningTarget,
+        {
+          drillPower: 10,
+          miningSpeedMultiplier: 1,
+          criticalChance: 0.05,
+          criticalMultiplier: 2,
+        },
+      );
+
+      for (const request of damageRequests) {
+        const result = this.#damage.apply(request);
+        if (result.hit) {
+          this.#visualEvents.push({
+            type: "BLOCK_HIT",
+            position: result.position,
+            critical: result.critical,
+          });
+        }
+        if (result.destroyedBlock) {
+          this.#breakPipeline.enqueue({
+            block: result.destroyedBlock,
+            chainDepth: result.chainDepth,
+          });
+        }
+      }
+
+      const breakResult = this.#breakPipeline.processTick({
+        emit: (event, request) => {
+          if (event === "VISUAL_EVENT_EMITTED") {
+            this.#visualEvents.push({
+              type: "BLOCK_BREAK",
+              position: {
+                x: request.block.tileX * BALANCE.tileSize + BALANCE.tileSize / 2,
+                y: request.block.tileY * BALANCE.tileSize + BALANCE.tileSize / 2,
+              },
+              color: BLOCK_DEFINITIONS[request.block.type].color,
+            });
+          }
+        },
+      });
+      const playerPosition = this.#player.getState().position;
+      this.#world.updateActiveSet(playerPosition);
+      this.#setSnapshot({
+        ...this.#snapshot,
+        depthMeters: this.#world.getDepthMeters(playerPosition.y),
+        xp: this.#snapshot.xp + breakResult.xpAwarded,
+        runCoins: this.#snapshot.runCoins + breakResult.runCoinsAwarded,
+        combo: this.#snapshot.combo + breakResult.processed,
+        breakGauge: Math.min(
+          100,
+          this.#snapshot.breakGauge + breakResult.breakGaugeAwarded,
+        ),
+      });
+    }
 
     const timeRemainingSeconds = Math.max(
       0,

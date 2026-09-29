@@ -66,7 +66,8 @@ describe("App home screen", () => {
     await user.click(screen.getByRole("button", { name: "SETTINGS" }));
     const reducedMotion = screen.getByLabelText("Reduced Motion");
     expect(reducedMotion).not.toBeChecked();
-    await user.click(reducedMotion);
+    reducedMotion.focus();
+    await user.keyboard(" ");
     expect(reducedMotion).toBeChecked();
     first.unmount();
 

@@ -8,6 +8,7 @@ describe("vertical-slice gameplay loop", () => {
       startingDepthMeters: 99,
       startingBreakGauge: 99,
       baseDrillPower: 10_000,
+      permanentUpgrades: { core_bonus: 1 },
     });
     engine.dispatch({ type: "START_RUN" });
     engine.dispatch({
@@ -23,7 +24,7 @@ describe("vertical-slice gameplay loop", () => {
 
     const levelUp = engine.getSnapshot();
     expect(levelUp.phase).toBe("LEVEL_UP");
-    expect(levelUp.coreShards).toBe(1);
+    expect(levelUp.coreShards).toBe(2);
     expect(levelUp.breakTimeRemainingSeconds).toBeGreaterThan(0);
     expect(levelUp.upgradeChoices).toHaveLength(3);
     const selected = levelUp.upgradeChoices[0]!.id;
@@ -46,7 +47,7 @@ describe("vertical-slice gameplay loop", () => {
       breakTimeRemainingSeconds: 0,
       result: {
         reason: "TIMER",
-        coreShards: 1,
+        coreShards: 2,
         build: expect.objectContaining({ [selected]: expect.any(Number) }),
       },
     });

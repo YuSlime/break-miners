@@ -30,7 +30,7 @@ export const PERMANENT_UPGRADES: Readonly<
   luck: { id: "luck", name: "LUCK", description: "+4% luck", maxLevel: 15, baseCost: 18, valuePerLevel: 0.04, unit: "PERCENT" },
   magnet: { id: "magnet", name: "MAGNET", description: "+6% pickup reach", maxLevel: 10, baseCost: 12, valuePerLevel: 0.06, unit: "PERCENT" },
   starting_xp: { id: "starting_xp", name: "STARTING XP", description: "+2 starting XP", maxLevel: 10, baseCost: 20, valuePerLevel: 2, unit: "FLAT" },
-  core_bonus: { id: "core_bonus", name: "CORE BONUS", description: "+5% Core rewards", maxLevel: 10, baseCost: 25, valuePerLevel: 0.05, unit: "PERCENT" },
+  core_bonus: { id: "core_bonus", name: "CORE BONUS", description: "+1 Core Shard per gate", maxLevel: 10, baseCost: 25, valuePerLevel: 1, unit: "FLAT" },
 });
 
 export function permanentUpgradeCost(id: PermanentUpgradeId, level: number): number {

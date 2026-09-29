@@ -61,6 +61,7 @@ export function App({ engine: providedEngine }: AppProps = {}): ReactElement {
         }),
   );
   const snapshot = useEngineSnapshot(engine);
+  const gameScreenActive = snapshot.phase !== "MENU";
   const canvasHostRef = useRef<HTMLDivElement>(null);
   const rendererRef = useRef<PixiRenderer | undefined>(undefined);
   const [rendererStatus, setRendererStatus] = useState<
@@ -73,6 +74,15 @@ export function App({ engine: providedEngine }: AppProps = {}): ReactElement {
     (x: number, y: number) => inputController.setTouchVector(x, y),
     [inputController],
   );
+
+  useEffect(() => {
+    if (!gameScreenActive) {
+      inputController.reset();
+      return;
+    }
+    const keyboard = new KeyboardInput(inputController);
+    return () => keyboard.destroy();
+  }, [gameScreenActive, inputController]);
 
   useEffect(() => {
     const result = snapshot.result;
@@ -158,7 +168,6 @@ export function App({ engine: providedEngine }: AppProps = {}): ReactElement {
       engine.setDocumentHidden(document.hidden);
     };
     document.addEventListener("visibilitychange", handleVisibilityChange);
-    const keyboard = new KeyboardInput(inputController);
 
     let frameId: number | undefined;
     let previousTime: number | undefined;
@@ -195,7 +204,6 @@ export function App({ engine: providedEngine }: AppProps = {}): ReactElement {
     return () => {
       document.removeEventListener("visibilitychange", handleVisibilityChange);
       if (frameId !== undefined) cancelAnimationFrame(frameId);
-      keyboard.destroy();
       queueMicrotask(() => {
         if (lifecycleGeneration.current !== generation) return;
         audio.destroy();
@@ -205,7 +213,7 @@ export function App({ engine: providedEngine }: AppProps = {}): ReactElement {
   }, [audio, engine, inputController]);
 
   useEffect(() => {
-    if (snapshot.phase === "MENU" || !canvasHostRef.current) return;
+    if (!gameScreenActive || !canvasHostRef.current) return;
     let cancelled = false;
     let resizeObserver: ResizeObserver | undefined;
     let resize = () => undefined;
@@ -260,7 +268,7 @@ export function App({ engine: providedEngine }: AppProps = {}): ReactElement {
       rendererRef.current?.destroy();
       rendererRef.current = undefined;
     };
-  }, [rendererRetry, snapshot.phase]);
+  }, [gameScreenActive, rendererRetry]);
 
   if (garageOpen && snapshot.phase === "MENU") {
     return (

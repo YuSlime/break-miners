@@ -1,5 +1,6 @@
 import type { UpgradeId } from "../data/upgrades";
 import type { UpgradeChoice } from "../upgrades/UpgradeManager";
+import type { RunResult } from "../run/resultTypes";
 
 export type GamePhase =
   | "BOOT"
@@ -34,6 +35,7 @@ export interface UISnapshot {
   breakTimeRemainingSeconds: number;
   upgradeChoices: readonly UpgradeChoice[];
   rerollsRemaining: number;
+  result: Readonly<RunResult> | null;
 }
 
 export type GameCommand =
@@ -42,6 +44,8 @@ export type GameCommand =
   | { type: "SELECT_UPGRADE"; upgradeId: UpgradeId }
   | { type: "REROLL_UPGRADES" }
   | { type: "SKIP_UPGRADE" }
+  | { type: "PLAY_AGAIN" }
+  | { type: "GO_HOME" }
   | { type: "PAUSE" }
   | { type: "RESUME" }
   | { type: "END_RUN" };

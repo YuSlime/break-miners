@@ -4,6 +4,7 @@ import type { PixiRenderer } from "../render/PixiRenderer";
 import { ErrorScreen } from "../ui/ErrorScreen";
 import { HUD } from "../ui/HUD";
 import { UpgradeModal } from "../ui/UpgradeModal";
+import { ResultScreen } from "../ui/ResultScreen";
 import { useEngineSnapshot } from "./useEngineSnapshot";
 import "../styles/app.css";
 
@@ -111,6 +112,14 @@ export function App(): ReactElement {
             }
             onSkip={() => engine.dispatch({ type: "SKIP_UPGRADE" })}
             rerollsRemaining={snapshot.rerollsRemaining}
+          />
+        )}
+        {snapshot.phase === "RESULT" && snapshot.result && (
+          <ResultScreen
+            onGarage={() => engine.dispatch({ type: "GO_HOME" })}
+            onHome={() => engine.dispatch({ type: "GO_HOME" })}
+            onPlayAgain={() => engine.dispatch({ type: "PLAY_AGAIN" })}
+            result={snapshot.result}
           />
         )}
         <section className="run-controls" aria-label="Expedition controls">

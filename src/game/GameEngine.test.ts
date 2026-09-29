@@ -166,4 +166,44 @@ describe("GameEngine clock", () => {
       breakTimeRemainingSeconds: 0,
     });
   });
+
+  it("freezes a complete result and starts replay with a fresh default seed", () => {
+    let now = 100;
+    const engine = new GameEngine({
+      now: () => now++,
+      runDurationSeconds: 1 / 60,
+    });
+    engine.dispatch({ type: "START_RUN" });
+    const firstSeed = engine.getRenderState().seed;
+    engine.advance(1 / 60);
+
+    const finished = engine.getSnapshot();
+    expect(finished.phase).toBe("RESULT");
+    expect(finished.result).toEqual(
+      expect.objectContaining({
+        reason: "TIMER",
+        depthMeters: expect.any(Number),
+        blocksBroken: expect.any(Number),
+        bestCombo: expect.any(Number),
+        runCoins: expect.any(Number),
+        awardedCredits: expect.any(Number),
+        coreShards: expect.any(Number),
+        geodes: expect.any(Number),
+        build: expect.any(Object),
+        recordChanges: expect.any(Array),
+      }),
+    );
+    const frozenPosition = engine.getRenderState().player.position;
+    engine.advance(1);
+    expect(engine.getRenderState().player.position).toEqual(frozenPosition);
+
+    engine.dispatch({ type: "PLAY_AGAIN" });
+    expect(engine.getSnapshot()).toMatchObject({
+      phase: "RUNNING",
+      timeRemainingSeconds: 1 / 60,
+      runCoins: 0,
+      result: null,
+    });
+    expect(engine.getRenderState().seed).not.toBe(firstSeed);
+  });
 });

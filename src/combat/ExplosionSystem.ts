@@ -31,6 +31,10 @@ export class ExplosionSystem {
     return this.#queue.length;
   }
 
+  clear(): void {
+    this.#queue.length = 0;
+  }
+
   maybeEnqueueOnBreak(
     block: Readonly<BlockState>,
     stats: Readonly<DerivedRunStats>,

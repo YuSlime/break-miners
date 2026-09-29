@@ -2,6 +2,7 @@ import { render, screen } from "@testing-library/react";
 import type { UISnapshot } from "../game/gameTypes";
 import { HUD } from "./HUD";
 import { UpgradeModal } from "./UpgradeModal";
+import { ResultScreen } from "./ResultScreen";
 
 const snapshot: UISnapshot = {
   phase: "RUNNING",
@@ -17,6 +18,7 @@ const snapshot: UISnapshot = {
   breakTimeRemainingSeconds: 0,
   upgradeChoices: [],
   rerollsRemaining: 1,
+  result: null,
 };
 
 describe("HUD", () => {
@@ -71,5 +73,40 @@ describe("UpgradeModal", () => {
     expect(screen.getByText("Lv 1 → 2")).toBeVisible();
     expect(screen.getByRole("button", { name: "REROLL 1" })).toBeEnabled();
     expect(screen.getByRole("button", { name: "SKIP +5 COINS" })).toBeEnabled();
+  });
+});
+
+describe("ResultScreen", () => {
+  it("shows the run summary, records, and navigation actions", () => {
+    render(
+      <ResultScreen
+        onGarage={() => undefined}
+        onHome={() => undefined}
+        onPlayAgain={() => undefined}
+        result={{
+          reason: "TIMER",
+          seed: 1,
+          depthMeters: 125,
+          blocksBroken: 80,
+          bestCombo: 17,
+          runCoins: 320,
+          awardedCredits: 32,
+          coreShards: 2,
+          geodes: 3,
+          build: { power_drill: 2 },
+          recordChanges: [
+            { record: "deepestMeters", previous: 90, current: 125 },
+          ],
+        }}
+      />,
+    );
+
+    expect(screen.getByRole("heading", { name: "EXPEDITION COMPLETE" })).toBeVisible();
+    expect(screen.getByText("125m")).toBeVisible();
+    expect(screen.getByText("+32 CREDITS")).toBeVisible();
+    expect(screen.getByText("NEW RECORD 90 → 125")).toBeVisible();
+    expect(screen.getByRole("button", { name: "PLAY AGAIN" })).toBeEnabled();
+    expect(screen.getByRole("button", { name: "GARAGE" })).toBeEnabled();
+    expect(screen.getByRole("button", { name: "HOME" })).toBeEnabled();
   });
 });

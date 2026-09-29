@@ -20,6 +20,10 @@ export interface CriticalSignal {
 export class LightningSystem {
   readonly #queue: LightningRequest[] = [];
 
+  clear(): void {
+    this.#queue.length = 0;
+  }
+
   enqueue(request: LightningRequest): boolean {
     if (
       request.chainDepth > BALANCE.maxChainDepth ||

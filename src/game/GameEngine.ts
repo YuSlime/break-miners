@@ -18,6 +18,7 @@ import { UpgradeManager, type LevelProgressResult } from "../upgrades/UpgradeMan
 import type { BaseRunStats } from "../upgrades/UpgradeEffects";
 import type { GameCommand, UISnapshot, Vec2, VisualEvent } from "./gameTypes";
 import { FixedStepLoop } from "./FixedStepLoop";
+import { RunSystem } from "../run/RunSystem";
 
 export interface GameEngineOptions {
   seed?: number | string;
@@ -39,6 +40,7 @@ export interface BlockRenderState {
   currentHp: number;
   maxHp: number;
   color: number;
+  boss: boolean;
 }
 
 export interface EngineRenderState {
@@ -64,6 +66,7 @@ const INITIAL_SNAPSHOT: Omit<UISnapshot, "timeRemainingSeconds"> = {
   breakTimeRemainingSeconds: 0,
   upgradeChoices: [],
   rerollsRemaining: 1,
+  result: null,
 };
 
 const BASE_RUN_STATS: BaseRunStats = {
@@ -105,6 +108,9 @@ export class GameEngine {
   #visualEvents: VisualEvent[] = [];
   #uiPublishAccumulator = 0;
   #destroyed = false;
+  #runSystem: RunSystem | undefined;
+  readonly #seedFactory: () => number;
+  #replayIndex = 0;
 
   constructor(options: GameEngineOptions = {}) {
     this.#runDurationSeconds =
@@ -115,7 +121,8 @@ export class GameEngine {
       Math.min(100, options.startingBreakGauge ?? 0),
     );
     this.#breakTime = new BreakTimeSystem(this.#startingBreakGauge);
-    this.#seed = options.seed ?? Math.floor((options.now ?? Date.now)());
+    this.#seedFactory = options.now ?? Date.now;
+    this.#seed = options.seed ?? Math.floor(this.#seedFactory());
     this.#snapshot = Object.freeze({
       ...INITIAL_SNAPSHOT,
       timeRemainingSeconds: this.#runDurationSeconds,
@@ -165,6 +172,11 @@ export class GameEngine {
           new SeededRng(this.#seed).fork("upgrades"),
         );
         const startingProgress = this.#upgrades.addXp(this.#startingXp);
+        this.#runSystem = new RunSystem({
+          durationSeconds: this.#runDurationSeconds,
+          seed: this.#seed,
+          firstCompletedRun: true,
+        });
         this.#breakPipeline.clear();
         this.#combo.reset();
         this.#breakTime = new BreakTimeSystem(this.#startingBreakGauge);
@@ -199,8 +211,28 @@ export class GameEngine {
         }
         break;
       case "END_RUN":
-        this.#setSnapshot({ ...this.#snapshot, phase: "RESULT" });
-        this.#publish();
+        if (this.#snapshot.phase !== "MENU" && this.#snapshot.phase !== "RESULT") {
+          this.#finishRun("MANUAL");
+        }
+        break;
+      case "PLAY_AGAIN":
+        if (this.#snapshot.phase === "RESULT") {
+          this.#replayIndex += 1;
+          this.dispatch({
+            type: "START_RUN",
+            seed: `${Math.floor(this.#seedFactory())}:replay:${this.#replayIndex}`,
+          });
+        }
+        break;
+      case "GO_HOME":
+        if (this.#snapshot.phase === "RESULT") {
+          this.#setSnapshot({
+            ...INITIAL_SNAPSHOT,
+            phase: "MENU",
+            timeRemainingSeconds: this.#runDurationSeconds,
+          });
+          this.#publish();
+        }
         break;
       case "SET_INPUT":
         this.#input = { ...command.input };
@@ -241,6 +273,7 @@ export class GameEngine {
         if (this.#snapshot.phase === "LEVEL_UP" && this.#upgrades) {
           const result = this.#upgrades.skip();
           if (result.accepted) {
+            this.#runSystem?.addRunCoins(result.runCoinsAwarded);
             this.#setSnapshot({
               ...this.#snapshot,
               phase: "RUNNING",
@@ -275,6 +308,7 @@ export class GameEngine {
                 currentHp: block.currentHp,
                 maxHp: block.maxHp,
                 color: BLOCK_DEFINITIONS[block.type].color,
+                boss: block.type === "CORE_GATE",
               }),
             ]
           : [],
@@ -320,6 +354,8 @@ export class GameEngine {
 
     this.#visualEvents = [];
     let levelProgress: LevelProgressResult | undefined;
+    let coreShardsAwarded = 0;
+    let runCoinsAwarded = 0;
     this.#combo.step(dt);
     const breakTimeStep = this.#breakTime.step(dt);
     if (breakTimeStep.ended) this.#visualEvents.push({ type: "BREAK_TIME_END" });
@@ -430,6 +466,35 @@ export class GameEngine {
             if (breakTimeResult.started) {
               this.#visualEvents.push({ type: "BREAK_TIME_START" });
             }
+            const rewardMultiplier = this.#breakTime.getModifiers().rewardMultiplier;
+            const blockRunCoins = Math.round(
+              Math.max(
+                1,
+                Math.round(BLOCK_DEFINITIONS[request.block.type].rewardMultiplier),
+              ) * rewardMultiplier,
+            );
+            runCoinsAwarded += blockRunCoins;
+            this.#runSystem?.recordBlockBreak({
+              type: request.block.type,
+              runCoins: blockRunCoins,
+              combo: Math.floor(comboResult.state.combo),
+            });
+            if (
+              request.block.type === "CORE_GATE" &&
+              this.#runSystem?.recordCoreDestroyed({
+                depthMeters: request.block.tileY,
+                coreShards: 1,
+              })
+            ) {
+              coreShardsAwarded += 1;
+              this.#visualEvents.push({
+                type: "CORE_GATE_DESTROYED",
+                position: {
+                  x: request.block.tileX * BALANCE.tileSize + BALANCE.tileSize / 2,
+                  y: request.block.tileY * BALANCE.tileSize + BALANCE.tileSize / 2,
+                },
+              });
+            }
           } else if (event === "VISUAL_EVENT_EMITTED") {
             this.#visualEvents.push({
               type: "BLOCK_BREAK",
@@ -449,28 +514,27 @@ export class GameEngine {
         },
       });
       this.#world.updateActiveSet(playerPosition);
+      const depthMeters = this.#world.getDepthMeters(playerPosition.y);
+      this.#runSystem?.setDepth(depthMeters);
+      this.#runSystem?.setBuild(this.#upgrades?.getBuild() ?? {});
       levelProgress = this.#upgrades?.addXp(breakResult.xpAwarded);
       this.#setSnapshot({
         ...this.#snapshot,
-        depthMeters: this.#world.getDepthMeters(playerPosition.y),
+        depthMeters,
         level: levelProgress?.level ?? this.#snapshot.level,
         xp: levelProgress?.xp ?? this.#snapshot.xp + breakResult.xpAwarded,
         xpRequired: levelProgress?.xpRequired ?? this.#snapshot.xpRequired,
-        runCoins:
-          this.#snapshot.runCoins +
-          Math.round(
-            breakResult.runCoinsAwarded *
-              this.#breakTime.getModifiers().rewardMultiplier,
-          ),
+        runCoins: this.#snapshot.runCoins + runCoinsAwarded,
         combo: Math.floor(this.#combo.getState().combo),
         breakGauge: this.#breakTime.getState().gauge,
         breakTimeRemainingSeconds: this.#breakTime.getState().remainingSeconds,
+        coreShards: this.#snapshot.coreShards + coreShardsAwarded,
       });
     }
 
-    const remainingAfterStep = this.#snapshot.timeRemainingSeconds - dt;
+    const runStep = this.#runSystem?.step(dt);
     const timeRemainingSeconds =
-      remainingAfterStep <= 1e-9 ? 0 : remainingAfterStep;
+      runStep?.timeRemainingSeconds ?? this.#snapshot.timeRemainingSeconds;
     let phase: UISnapshot["phase"] =
       timeRemainingSeconds === 0 ? "RESULT" : "RUNNING";
     if (phase === "RESULT") {
@@ -500,6 +564,12 @@ export class GameEngine {
       breakTimeRemainingSeconds: this.#breakTime.getState().remainingSeconds,
     });
 
+    if (phase === "RESULT") {
+      this.#finishRun("TIMER", false);
+      this.#publish();
+      return;
+    }
+
     this.#uiPublishAccumulator += dt;
     const publishInterval = 1 / BALANCE.uiPublishHz;
     if (this.#uiPublishAccumulator + Number.EPSILON >= publishInterval) {
@@ -514,5 +584,26 @@ export class GameEngine {
 
   #publish(): void {
     this.#listeners.forEach((listener) => listener());
+  }
+
+  #finishRun(reason: "TIMER" | "MANUAL", publish = true): void {
+    const result = this.#runSystem?.finish(reason) ?? null;
+    this.#breakPipeline.clear();
+    this.#explosions?.clear();
+    this.#lightning.clear();
+    this.#drones.reset();
+    this.#breakTime.cancel();
+    this.#input = { moveX: 0, moveY: 0, abilityPressed: false };
+    this.#setSnapshot({
+      ...this.#snapshot,
+      phase: "RESULT",
+      timeRemainingSeconds: 0,
+      breakGauge: 0,
+      breakTimeRemainingSeconds: 0,
+      upgradeChoices: [],
+      result,
+      coreShards: result?.coreShards ?? this.#snapshot.coreShards,
+    });
+    if (publish) this.#publish();
   }
 }

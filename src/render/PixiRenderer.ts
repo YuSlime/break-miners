@@ -119,6 +119,11 @@ export class PixiRenderer {
         display
           .roundRect(1, 1, BALANCE.tileSize - 2, BALANCE.tileSize - 2, 5)
           .fill(block.color);
+        if (block.boss) {
+          display
+            .roundRect(2, 2, BALANCE.tileSize - 4, BALANCE.tileSize - 4, 4)
+            .stroke({ color: 0xffffff, width: 2 });
+        }
         this.#world.addChildAt(display, 0);
         this.#blocks.set(block.id, display);
       }

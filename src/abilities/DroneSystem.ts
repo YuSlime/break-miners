@@ -20,6 +20,11 @@ export class DroneSystem {
   #laser = false;
   #accumulator = 0;
 
+  reset(): void {
+    this.#count = 0;
+    this.#accumulator = 0;
+  }
+
   syncBuild(build: Readonly<RunBuild>): void {
     this.#count = (build.mining_drone ?? 0) + ((build.drone_army ?? 0) > 0 ? 5 : 0);
     this.#attackInterval = 1 / (1 + (build.rapid_drone ?? 0) * 0.25);

@@ -5,6 +5,7 @@ import { UpgradeModal } from "./UpgradeModal";
 import { ResultScreen } from "./ResultScreen";
 import { GarageScreen } from "./GarageScreen";
 import { createDefaultSave } from "../save/SaveSchema";
+import { SettingsScreen, settingsWithSystemMotionPreference } from "./SettingsScreen";
 
 const snapshot: UISnapshot = {
   phase: "RUNNING",
@@ -133,5 +134,30 @@ describe("GarageScreen", () => {
     expect(screen.getByRole("button", { name: "DRILL POWER MAX" })).toBeDisabled();
     expect(screen.getByRole("button", { name: /MOVE SPEED 10 CREDITS/ })).toBeEnabled();
     expect(screen.getByRole("button", { name: /CRIT CHANCE 14 CREDITS/ })).toBeDisabled();
+  });
+});
+
+describe("SettingsScreen", () => {
+  it("uses the system motion preference only without a saved override", () => {
+    const settings = createDefaultSave().settings;
+    expect(settingsWithSystemMotionPreference(settings, false, true).reducedMotion).toBe(true);
+    expect(settingsWithSystemMotionPreference(settings, true, true).reducedMotion).toBe(false);
+  });
+
+  it("associates every setting label with a touch-sized control", () => {
+    render(
+      <SettingsScreen
+        onBack={() => undefined}
+        onChange={() => undefined}
+        settings={createDefaultSave().settings}
+      />,
+    );
+
+    for (const label of [
+      "Master Volume", "Music", "SFX", "Particles", "Camera Shake",
+      "Damage Numbers", "Screen Flash", "Vibration", "FPS Limit", "Reduced Motion",
+    ]) {
+      expect(screen.getByLabelText(label)).toHaveClass("touch-control");
+    }
   });
 });

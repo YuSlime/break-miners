@@ -4,12 +4,16 @@ import type { RunRecords } from "../run/resultTypes";
 export type QualitySetting = "AUTO" | "LOW" | "MEDIUM" | "HIGH";
 
 export interface SettingsData {
+  masterVolume: number;
   musicVolume: number;
   sfxVolume: number;
   quality: QualitySetting;
   reducedMotion: boolean;
+  damageNumbers: boolean;
   screenFlash: boolean;
+  vibration: boolean;
   cameraShakePercent: number;
+  fpsLimit: 30 | 60 | 120;
 }
 
 export interface DropHistoryEntry {

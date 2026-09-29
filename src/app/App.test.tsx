@@ -10,6 +10,7 @@ vi.mock("../render/PixiRenderer", () => ({
       destroy: vi.fn(),
       render: vi.fn(),
       resize: vi.fn(),
+      setQuality: vi.fn(),
     }),
   },
 }));
@@ -46,5 +47,20 @@ describe("App home screen", () => {
     await user.click(screen.getByRole("button", { name: "GARAGE" }));
     expect(screen.getByText("Lv 1 / 20")).toBeVisible();
     expect(screen.getByText("0 CREDITS", { selector: ".garage-header strong" })).toBeVisible();
+  });
+
+  it("applies and persists accessibility settings immediately", async () => {
+    const user = userEvent.setup();
+    const first = render(<App />);
+    await user.click(screen.getByRole("button", { name: "SETTINGS" }));
+    const reducedMotion = screen.getByLabelText("Reduced Motion");
+    expect(reducedMotion).not.toBeChecked();
+    await user.click(reducedMotion);
+    expect(reducedMotion).toBeChecked();
+    first.unmount();
+
+    render(<App />);
+    await user.click(screen.getByRole("button", { name: "SETTINGS" }));
+    expect(screen.getByLabelText("Reduced Motion")).toBeChecked();
   });
 });

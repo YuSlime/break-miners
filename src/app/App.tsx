@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type ReactElement } from "react";
+import { useCallback, useEffect, useRef, useState, type ReactElement } from "react";
 import { GameEngine } from "../game/GameEngine";
 import type { PixiRenderer } from "../render/PixiRenderer";
 import { ErrorScreen } from "../ui/ErrorScreen";
@@ -13,6 +13,11 @@ import {
   type PermanentUpgradeId,
 } from "../data/permanentUpgrades";
 import { GarageScreen } from "../ui/GarageScreen";
+import { SettingsScreen, settingsWithSystemMotionPreference } from "../ui/SettingsScreen";
+import { InputController } from "../input/InputController";
+import { KeyboardInput } from "../input/KeyboardInput";
+import { VirtualStick } from "../input/VirtualStick";
+import { AudioManager, type AudioEventType } from "../audio/AudioManager";
 import "../styles/app.css";
 
 export interface AppProps {
@@ -21,12 +26,31 @@ export interface AppProps {
 
 export function App({ engine: providedEngine }: AppProps = {}): ReactElement {
   const [saveManager] = useState(() => new SaveManager(window.localStorage));
-  const [initialLoad] = useState(() => saveManager.load());
+  const [initialLoad] = useState(() => {
+    const loaded = saveManager.load();
+    const prefersReducedMotion =
+      typeof window.matchMedia === "function" &&
+      window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    return {
+      ...loaded,
+      data: {
+        ...loaded.data,
+        settings: settingsWithSystemMotionPreference(
+          loaded.data.settings,
+          loaded.source !== "DEFAULT",
+          prefersReducedMotion,
+        ),
+      },
+    };
+  });
   const [saveData, setSaveData] = useState<SaveData>(initialLoad.data);
   const saveDataRef = useRef(saveData);
   saveDataRef.current = saveData;
   const [saveWarning, setSaveWarning] = useState(initialLoad.warning ?? "");
   const [garageOpen, setGarageOpen] = useState(false);
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  const [inputController] = useState(() => new InputController());
+  const [audio] = useState(() => new AudioManager());
   const [engine] = useState(
     () =>
       providedEngine ??
@@ -44,6 +68,10 @@ export function App({ engine: providedEngine }: AppProps = {}): ReactElement {
   >("IDLE");
   const [rendererRetry, setRendererRetry] = useState(0);
   const awardedResults = useRef(new Set<string>());
+  const setTouchVector = useCallback(
+    (x: number, y: number) => inputController.setTouchVector(x, y),
+    [inputController],
+  );
 
   useEffect(() => {
     const result = snapshot.result;
@@ -100,21 +128,61 @@ export function App({ engine: providedEngine }: AppProps = {}): ReactElement {
     });
   };
 
+  const updateSettings = (settings: SaveData["settings"]) => {
+    const written = saveManager.save({ ...saveData, settings });
+    if (!written.ok) {
+      setSaveWarning("Settings are active for this session but could not be saved.");
+    }
+    setSaveData(written.data);
+  };
+
+  useEffect(() => {
+    audio.setSettings(saveData.settings);
+    rendererRef.current?.setQuality({
+      deviceClass:
+        typeof window.matchMedia === "function" &&
+        window.matchMedia("(pointer: coarse)").matches
+          ? "MOBILE"
+          : "DESKTOP",
+      quality: saveData.settings.quality,
+      reducedMotion: saveData.settings.reducedMotion,
+      screenFlash: saveData.settings.screenFlash,
+      cameraShakePercent: saveData.settings.cameraShakePercent,
+    });
+  }, [audio, saveData.settings]);
+
   useEffect(() => {
     const handleVisibilityChange = () => {
       engine.setDocumentHidden(document.hidden);
     };
     document.addEventListener("visibilitychange", handleVisibilityChange);
+    const keyboard = new KeyboardInput(inputController);
 
     let frameId: number | undefined;
     let previousTime: number | undefined;
+    let previousRenderTime = 0;
     const frame = (time: number) => {
       if (previousTime !== undefined) {
+        engine.dispatch({ type: "SET_INPUT", input: inputController.snapshot() });
         engine.advance((time - previousTime) / 1000);
       }
       const renderState = engine.getRenderState();
       rendererRef.current?.consumeVisualEvents(renderState.visualEvents);
-      rendererRef.current?.render(renderState, 0);
+      for (const event of renderState.visualEvents) {
+        const type: AudioEventType | undefined =
+          event.type === "BLOCK_HIT" ? "MINE" :
+          event.type === "BLOCK_BREAK" ? "BLOCK_BREAK" :
+          event.type === "EXPLOSION" ? "EXPLOSION" :
+          event.type === "LIGHTNING" ? "LIGHTNING" :
+          event.type === "BREAK_TIME_START" ? "BREAK_TIME_START" :
+          event.type === "CORE_GATE_DESTROYED" ? "CORE_GATE" : undefined;
+        if (type) void audio.play({ type, combo: engine.getSnapshot().combo });
+      }
+      const frameInterval = 1000 / saveDataRef.current.settings.fpsLimit;
+      if (time - previousRenderTime + Number.EPSILON >= frameInterval) {
+        rendererRef.current?.render(renderState, 0);
+        previousRenderTime = time;
+      }
       previousTime = time;
       frameId = requestAnimationFrame(frame);
     };
@@ -125,14 +193,17 @@ export function App({ engine: providedEngine }: AppProps = {}): ReactElement {
     return () => {
       document.removeEventListener("visibilitychange", handleVisibilityChange);
       if (frameId !== undefined) cancelAnimationFrame(frameId);
+      keyboard.destroy();
+      audio.destroy();
       engine.destroy();
     };
-  }, [engine]);
+  }, [audio, engine, inputController]);
 
   useEffect(() => {
     if (snapshot.phase === "MENU" || !canvasHostRef.current) return;
     let cancelled = false;
     let resizeObserver: ResizeObserver | undefined;
+    let resize = () => undefined;
     setRendererStatus("LOADING");
 
     void import("../render/PixiRenderer")
@@ -140,7 +211,7 @@ export function App({ engine: providedEngine }: AppProps = {}): ReactElement {
         PixiRenderer.create({
           container: canvasHostRef.current!,
           resolutionCap: 2,
-          reducedMotion: window.matchMedia("(prefers-reduced-motion: reduce)").matches,
+          reducedMotion: saveDataRef.current.settings.reducedMotion,
         }),
       )
       .then((renderer) => {
@@ -149,14 +220,27 @@ export function App({ engine: providedEngine }: AppProps = {}): ReactElement {
           return;
         }
         rendererRef.current = renderer;
-        const resize = () => {
+        resize = () => {
           const host = canvasHostRef.current;
           if (!host) return;
           renderer.resize(host.clientWidth, host.clientHeight, window.devicePixelRatio);
         };
         resizeObserver = new ResizeObserver(resize);
         resizeObserver.observe(canvasHostRef.current!);
+        window.addEventListener("orientationchange", resize);
+        window.addEventListener("resize", resize);
         resize();
+        renderer.setQuality({
+          deviceClass:
+            typeof window.matchMedia === "function" &&
+            window.matchMedia("(pointer: coarse)").matches
+              ? "MOBILE"
+              : "DESKTOP",
+          quality: saveDataRef.current.settings.quality,
+          reducedMotion: saveDataRef.current.settings.reducedMotion,
+          screenFlash: saveDataRef.current.settings.screenFlash,
+          cameraShakePercent: saveDataRef.current.settings.cameraShakePercent,
+        });
         setRendererStatus("READY");
       })
       .catch(() => {
@@ -166,6 +250,8 @@ export function App({ engine: providedEngine }: AppProps = {}): ReactElement {
     return () => {
       cancelled = true;
       resizeObserver?.disconnect();
+      window.removeEventListener("orientationchange", resize);
+      window.removeEventListener("resize", resize);
       rendererRef.current?.destroy();
       rendererRef.current = undefined;
     };
@@ -177,6 +263,16 @@ export function App({ engine: providedEngine }: AppProps = {}): ReactElement {
         onBack={() => setGarageOpen(false)}
         onPurchase={purchase}
         save={saveData}
+      />
+    );
+  }
+
+  if (settingsOpen && snapshot.phase === "MENU") {
+    return (
+      <SettingsScreen
+        onBack={() => setSettingsOpen(false)}
+        onChange={updateSettings}
+        settings={saveData.settings}
       />
     );
   }
@@ -195,6 +291,9 @@ export function App({ engine: providedEngine }: AppProps = {}): ReactElement {
           />
         )}
         <HUD snapshot={snapshot} />
+        {snapshot.phase === "RUNNING" ? (
+          <VirtualStick onVector={setTouchVector} />
+        ) : null}
         {snapshot.phase === "LEVEL_UP" && (
           <UpgradeModal
             choices={snapshot.upgradeChoices}
@@ -263,7 +362,7 @@ export function App({ engine: providedEngine }: AppProps = {}): ReactElement {
           <button className="secondary-button" onClick={() => setGarageOpen(true)} type="button">
             GARAGE
           </button>
-          <button className="secondary-button" type="button">
+          <button className="secondary-button" onClick={() => setSettingsOpen(true)} type="button">
             SETTINGS
           </button>
         </nav>

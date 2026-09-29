@@ -5,6 +5,7 @@ import type { Vec2, VisualEvent } from "../game/gameTypes";
 import { Camera } from "./Camera";
 import { DisplayPool } from "./DisplayPools";
 import {
+  AutoQualityController,
   particleLimit,
   type RenderQualitySettings,
 } from "./ParticleBudget";
@@ -33,6 +34,8 @@ export class PixiRenderer {
   #quality: RenderQualitySettings;
   #viewport = { width: 1, height: 1 };
   #previousPlayerPosition: Vec2 | undefined;
+  readonly #autoQuality = new AutoQualityController();
+  #lastRenderTime: number | undefined;
 
   private constructor(
     application: Application,
@@ -104,6 +107,12 @@ export class PixiRenderer {
   }
 
   render(state: Readonly<EngineRenderState>, _alpha: number): void {
+    const now = performance.now();
+    if (this.#lastRenderTime !== undefined && this.#quality.quality === "AUTO") {
+      const elapsed = Math.max(0.001, (now - this.#lastRenderTime) / 1000);
+      this.#autoQuality.sample(1 / elapsed, elapsed);
+    }
+    this.#lastRenderTime = now;
     const liveIds = new Set(state.blocks.map((block) => block.id));
     for (const [id, display] of this.#blocks) {
       if (!liveIds.has(id)) {
@@ -166,7 +175,13 @@ export class PixiRenderer {
   }
 
   consumeVisualEvents(events: readonly VisualEvent[]): void {
-    const limit = particleLimit(this.#quality);
+    const limit = particleLimit({
+      deviceClass: this.#quality.deviceClass,
+      quality:
+        this.#quality.quality === "AUTO"
+          ? this.#autoQuality.getQuality()
+          : this.#quality.quality,
+    });
     for (const event of events) {
       if (this.#activeEffects.length >= limit) break;
       if (event.type === "BLOCK_HIT") {

@@ -13,12 +13,16 @@ import type {
 export const SAVE_VERSION = 1 as const;
 
 const DEFAULT_SETTINGS: Readonly<SettingsData> = Object.freeze({
+  masterVolume: 1,
   musicVolume: 0.7,
   sfxVolume: 0.8,
   quality: "AUTO",
   reducedMotion: false,
+  damageNumbers: true,
   screenFlash: true,
+  vibration: true,
   cameraShakePercent: 100,
+  fpsLimit: 60,
 });
 
 export function createDefaultSave(): SaveData {
@@ -101,6 +105,7 @@ export function parseSaveData(value: unknown): SaveParseResult {
       mostBlocksBroken: integer(recordSource.mostBlocksBroken),
     },
     settings: {
+      masterVolume: unit(settingsSource.masterVolume, DEFAULT_SETTINGS.masterVolume),
       musicVolume: unit(settingsSource.musicVolume, DEFAULT_SETTINGS.musicVolume),
       sfxVolume: unit(settingsSource.sfxVolume, DEFAULT_SETTINGS.sfxVolume),
       quality,
@@ -108,11 +113,23 @@ export function parseSaveData(value: unknown): SaveParseResult {
         typeof settingsSource.reducedMotion === "boolean"
           ? settingsSource.reducedMotion
           : DEFAULT_SETTINGS.reducedMotion,
+      damageNumbers:
+        typeof settingsSource.damageNumbers === "boolean"
+          ? settingsSource.damageNumbers
+          : DEFAULT_SETTINGS.damageNumbers,
       screenFlash:
         typeof settingsSource.screenFlash === "boolean"
           ? settingsSource.screenFlash
           : DEFAULT_SETTINGS.screenFlash,
+      vibration:
+        typeof settingsSource.vibration === "boolean"
+          ? settingsSource.vibration
+          : DEFAULT_SETTINGS.vibration,
       cameraShakePercent: Math.min(100, integer(settingsSource.cameraShakePercent, 100)),
+      fpsLimit:
+        settingsSource.fpsLimit === 30 || settingsSource.fpsLimit === 120
+          ? settingsSource.fpsLimit
+          : 60,
     },
     recentDrops,
   };

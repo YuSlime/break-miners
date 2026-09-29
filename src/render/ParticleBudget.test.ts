@@ -1,6 +1,6 @@
 import { Camera } from "./Camera";
 import { DisplayPool } from "./DisplayPools";
-import { particleLimit } from "./ParticleBudget";
+import { AutoQualityController, particleLimit } from "./ParticleBudget";
 
 describe("Camera", () => {
   it("looks ahead in the direction of movement", () => {
@@ -32,6 +32,20 @@ describe("particleLimit", () => {
 
   it("caps high-quality desktop visuals at 2000 particles", () => {
     expect(particleLimit({ deviceClass: "DESKTOP", quality: "HIGH" })).toBe(2000);
+  });
+});
+
+describe("AutoQualityController", () => {
+  it("drops after three low-FPS seconds and recovers conservatively", () => {
+    const auto = new AutoQualityController();
+    for (let index = 0; index < 2; index += 1) auto.sample(35, 1);
+    expect(auto.getQuality()).toBe("MEDIUM");
+    auto.sample(35, 1);
+    expect(auto.getQuality()).toBe("LOW");
+    for (let index = 0; index < 5; index += 1) auto.sample(60, 1);
+    expect(auto.getQuality()).toBe("LOW");
+    auto.sample(60, 1);
+    expect(auto.getQuality()).toBe("MEDIUM");
   });
 });
 

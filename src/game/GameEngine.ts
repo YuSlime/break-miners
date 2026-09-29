@@ -8,6 +8,9 @@ import { ChunkManager } from "../world/ChunkManager";
 import { SeededRng } from "../world/SeededRng";
 import { WorldGenerator } from "../world/WorldGenerator";
 import type { BiomeId, BlockType } from "../world/worldTypes";
+import { RUN_UPGRADES } from "../data/upgrades";
+import { UpgradeManager, type LevelProgressResult } from "../upgrades/UpgradeManager";
+import type { BaseRunStats } from "../upgrades/UpgradeEffects";
 import type { GameCommand, UISnapshot, Vec2, VisualEvent } from "./gameTypes";
 import { FixedStepLoop } from "./FixedStepLoop";
 
@@ -15,6 +18,7 @@ export interface GameEngineOptions {
   seed?: number | string;
   runDurationSeconds?: number;
   now?: () => number;
+  startingXp?: number;
 }
 
 export interface PlayerRenderState {
@@ -51,10 +55,29 @@ const INITIAL_SNAPSHOT: Omit<UISnapshot, "timeRemainingSeconds"> = {
   combo: 0,
   breakGauge: 0,
   breakTimeRemainingSeconds: 0,
+  upgradeChoices: [],
+  rerollsRemaining: 1,
+};
+
+const BASE_RUN_STATS: BaseRunStats = {
+  drillPower: 10,
+  miningSpeedMultiplier: 1,
+  moveSpeedMultiplier: 1,
+  criticalChance: 0.05,
+  criticalMultiplier: 2,
+  explosionChance: 0,
+  explosionRadius: 1.5,
+  explosionDamageMultiplier: 1,
+  lightningTargets: 0,
+  lightningDamageMultiplier: 1,
+  droneCount: 0,
+  droneAttackSpeedMultiplier: 1,
+  droneDamageMultiplier: 1,
 };
 
 export class GameEngine {
   readonly #runDurationSeconds: number;
+  readonly #startingXp: number;
   readonly #loop: FixedStepLoop;
   readonly #listeners = new Set<() => void>();
   #seed: number | string;
@@ -63,6 +86,7 @@ export class GameEngine {
   #player: PlayerSystem | undefined;
   readonly #mining = new MiningSystem();
   #damage: DamageSystem | undefined;
+  #upgrades: UpgradeManager | undefined;
   readonly #breakPipeline = new BreakPipeline();
   #input = { moveX: 0, moveY: 0, abilityPressed: false };
   #visualEvents: VisualEvent[] = [];
@@ -72,6 +96,7 @@ export class GameEngine {
   constructor(options: GameEngineOptions = {}) {
     this.#runDurationSeconds =
       options.runDurationSeconds ?? BALANCE.runDurationSeconds;
+    this.#startingXp = Math.max(0, options.startingXp ?? 0);
     this.#seed = options.seed ?? Math.floor((options.now ?? Date.now)());
     this.#snapshot = Object.freeze({
       ...INITIAL_SNAPSHOT,
@@ -114,6 +139,11 @@ export class GameEngine {
           this.#world,
           new SeededRng(this.#seed).fork("damage"),
         );
+        this.#upgrades = new UpgradeManager(
+          RUN_UPGRADES,
+          new SeededRng(this.#seed).fork("upgrades"),
+        );
+        const startingProgress = this.#upgrades.addXp(this.#startingXp);
         this.#breakPipeline.clear();
         this.#mining.resetTarget();
         this.#input = { moveX: 0, moveY: 0, abilityPressed: false };
@@ -122,6 +152,10 @@ export class GameEngine {
           ...INITIAL_SNAPSHOT,
           phase: "RUNNING",
           timeRemainingSeconds: this.#runDurationSeconds,
+          level: startingProgress.level,
+          xp: startingProgress.xp,
+          xpRequired: startingProgress.xpRequired,
+          rerollsRemaining: 1,
         });
         this.#loop.reset();
         this.#publish();
@@ -148,8 +182,50 @@ export class GameEngine {
         this.#input = { ...command.input };
         break;
       case "SELECT_UPGRADE":
+        if (
+          this.#snapshot.phase === "LEVEL_UP" &&
+          this.#upgrades?.select(command.upgradeId).accepted
+        ) {
+          const progress = this.#upgrades.getProgress();
+          this.#setSnapshot({
+            ...this.#snapshot,
+            phase: "RUNNING",
+            upgradeChoices: [],
+            rerollsRemaining: progress.rerollsRemaining,
+          });
+          this.#publish();
+        }
+        break;
       case "REROLL_UPGRADES":
+        if (this.#snapshot.phase === "LEVEL_UP" && this.#upgrades) {
+          const result = this.#upgrades.reroll({
+            luck: 0,
+            elapsedRunSeconds:
+              this.#runDurationSeconds - this.#snapshot.timeRemainingSeconds,
+          });
+          if (result.accepted) {
+            this.#setSnapshot({
+              ...this.#snapshot,
+              upgradeChoices: result.choices,
+              rerollsRemaining: result.rerollsRemaining,
+            });
+            this.#publish();
+          }
+        }
+        break;
       case "SKIP_UPGRADE":
+        if (this.#snapshot.phase === "LEVEL_UP" && this.#upgrades) {
+          const result = this.#upgrades.skip();
+          if (result.accepted) {
+            this.#setSnapshot({
+              ...this.#snapshot,
+              phase: "RUNNING",
+              runCoins: this.#snapshot.runCoins + result.runCoinsAwarded,
+              upgradeChoices: [],
+            });
+            this.#publish();
+          }
+        }
         break;
     }
   }
@@ -218,16 +294,30 @@ export class GameEngine {
     if (this.#snapshot.phase !== "RUNNING") return;
 
     this.#visualEvents = [];
+    let levelProgress: LevelProgressResult | undefined;
     if (this.#world && this.#player && this.#damage) {
+      const stats = this.#upgrades?.getDerivedStats(BASE_RUN_STATS) ?? {
+        ...BASE_RUN_STATS,
+        piercingChance: 0,
+        multiBombChance: 0,
+        clusterBombs: 0,
+        staticHit: false,
+        thunderstormThreshold: 0,
+        droneCapBonus: 0,
+        laserDrone: false,
+        nuclearBomb: false,
+        thunderGod: false,
+        droneArmy: false,
+      };
       const playerStep = this.#player.step(dt, this.#input, this.#world);
       const damageRequests = this.#mining.step(
         dt,
         playerStep.miningTarget,
         {
-          drillPower: 10,
-          miningSpeedMultiplier: 1,
-          criticalChance: 0.05,
-          criticalMultiplier: 2,
+          drillPower: stats.drillPower,
+          miningSpeedMultiplier: stats.miningSpeedMultiplier,
+          criticalChance: stats.criticalChance,
+          criticalMultiplier: stats.criticalMultiplier,
         },
       );
 
@@ -264,10 +354,13 @@ export class GameEngine {
       });
       const playerPosition = this.#player.getState().position;
       this.#world.updateActiveSet(playerPosition);
+      levelProgress = this.#upgrades?.addXp(breakResult.xpAwarded);
       this.#setSnapshot({
         ...this.#snapshot,
         depthMeters: this.#world.getDepthMeters(playerPosition.y),
-        xp: this.#snapshot.xp + breakResult.xpAwarded,
+        level: levelProgress?.level ?? this.#snapshot.level,
+        xp: levelProgress?.xp ?? this.#snapshot.xp + breakResult.xpAwarded,
+        xpRequired: levelProgress?.xpRequired ?? this.#snapshot.xpRequired,
         runCoins: this.#snapshot.runCoins + breakResult.runCoinsAwarded,
         combo: this.#snapshot.combo + breakResult.processed,
         breakGauge: Math.min(
@@ -277,12 +370,28 @@ export class GameEngine {
       });
     }
 
-    const timeRemainingSeconds = Math.max(
-      0,
-      this.#snapshot.timeRemainingSeconds - dt,
-    );
-    const phase = timeRemainingSeconds === 0 ? "RESULT" : "RUNNING";
-    this.#setSnapshot({ ...this.#snapshot, phase, timeRemainingSeconds });
+    const remainingAfterStep = this.#snapshot.timeRemainingSeconds - dt;
+    const timeRemainingSeconds =
+      remainingAfterStep <= 1e-9 ? 0 : remainingAfterStep;
+    let phase: UISnapshot["phase"] =
+      timeRemainingSeconds === 0 ? "RESULT" : "RUNNING";
+    let upgradeChoices = this.#snapshot.upgradeChoices;
+    let rerollsRemaining = this.#snapshot.rerollsRemaining;
+    if (phase !== "RESULT" && levelProgress?.leveledUp && this.#upgrades) {
+      phase = "LEVEL_UP";
+      upgradeChoices = this.#upgrades.createChoices({
+        luck: 0,
+        elapsedRunSeconds: this.#runDurationSeconds - timeRemainingSeconds,
+      });
+      rerollsRemaining = this.#upgrades.getProgress().rerollsRemaining;
+    }
+    this.#setSnapshot({
+      ...this.#snapshot,
+      phase,
+      timeRemainingSeconds,
+      upgradeChoices: phase === "RESULT" ? [] : upgradeChoices,
+      rerollsRemaining,
+    });
 
     this.#uiPublishAccumulator += dt;
     const publishInterval = 1 / BALANCE.uiPublishHz;

@@ -87,8 +87,61 @@ describe("GameEngine clock", () => {
       engine.advance(1 / 60);
     }
 
-    expect(engine.getSnapshot().xp).toBeGreaterThan(0);
-    expect(engine.getSnapshot().runCoins).toBeGreaterThan(0);
+    const rewarded = engine.getSnapshot();
+    expect(rewarded.level > 1 || rewarded.xp > 0).toBe(true);
+    expect(rewarded.runCoins).toBeGreaterThan(0);
     expect(engine.getRenderState().player.position.x).toBeGreaterThan(0);
+  });
+
+  it("pauses on level-up with three choices and resumes after selection", () => {
+    const engine = new GameEngine({ seed: "level-up-path" });
+    engine.dispatch({ type: "START_RUN" });
+    engine.dispatch({
+      type: "SET_INPUT",
+      input: { moveX: 1, moveY: 0, abilityPressed: false },
+    });
+
+    for (
+      let step = 0;
+      step < 3_600 && engine.getSnapshot().phase === "RUNNING";
+      step += 1
+    ) {
+      engine.advance(1 / 60);
+    }
+
+    const levelUp = engine.getSnapshot();
+    expect(levelUp.phase).toBe("LEVEL_UP");
+    expect(levelUp.upgradeChoices).toHaveLength(3);
+    const pausedTime = levelUp.timeRemainingSeconds;
+    engine.advance(1);
+    expect(engine.getSnapshot().timeRemainingSeconds).toBe(pausedTime);
+
+    engine.dispatch({
+      type: "SELECT_UPGRADE",
+      upgradeId: levelUp.upgradeChoices[0]!.id,
+    });
+    expect(engine.getSnapshot().phase).toBe("RUNNING");
+  });
+
+  it("gives timer expiry priority over a level-up earned on the same fixed step", () => {
+    const engine = new GameEngine({
+      seed: 1,
+      startingXp: 13,
+      runDurationSeconds: 9 / 60,
+    });
+    engine.dispatch({ type: "START_RUN" });
+    engine.dispatch({
+      type: "SET_INPUT",
+      input: { moveX: 1, moveY: 0, abilityPressed: false },
+    });
+
+    for (let step = 0; step < 9; step += 1) engine.advance(1 / 60);
+
+    expect(engine.getSnapshot().timeRemainingSeconds).toBe(0);
+    expect(engine.getSnapshot().phase).toBe("RESULT");
+    expect(engine.getSnapshot().level).toBe(2);
+    expect(engine.getSnapshot().upgradeChoices).toHaveLength(0);
+    engine.dispatch({ type: "SELECT_UPGRADE", upgradeId: "power_drill" });
+    expect(engine.getSnapshot().phase).toBe("RESULT");
   });
 });

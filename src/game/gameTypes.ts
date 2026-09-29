@@ -1,3 +1,6 @@
+import type { UpgradeId } from "../data/upgrades";
+import type { UpgradeChoice } from "../upgrades/UpgradeManager";
+
 export type GamePhase =
   | "BOOT"
   | "MENU"
@@ -29,12 +32,14 @@ export interface UISnapshot {
   combo: number;
   breakGauge: number;
   breakTimeRemainingSeconds: number;
+  upgradeChoices: readonly UpgradeChoice[];
+  rerollsRemaining: number;
 }
 
 export type GameCommand =
   | { type: "START_RUN"; seed?: number | string }
   | { type: "SET_INPUT"; input: InputSnapshot }
-  | { type: "SELECT_UPGRADE"; upgradeId: string }
+  | { type: "SELECT_UPGRADE"; upgradeId: UpgradeId }
   | { type: "REROLL_UPGRADES" }
   | { type: "SKIP_UPGRADE" }
   | { type: "PAUSE" }

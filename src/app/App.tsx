@@ -1,11 +1,20 @@
-import { useEffect, useState, type ReactElement } from "react";
+import { useEffect, useRef, useState, type ReactElement } from "react";
 import { GameEngine } from "../game/GameEngine";
+import type { PixiRenderer } from "../render/PixiRenderer";
+import { ErrorScreen } from "../ui/ErrorScreen";
+import { HUD } from "../ui/HUD";
 import { useEngineSnapshot } from "./useEngineSnapshot";
 import "../styles/app.css";
 
 export function App(): ReactElement {
   const [engine] = useState(() => new GameEngine());
   const snapshot = useEngineSnapshot(engine);
+  const canvasHostRef = useRef<HTMLDivElement>(null);
+  const rendererRef = useRef<PixiRenderer | undefined>(undefined);
+  const [rendererStatus, setRendererStatus] = useState<
+    "IDLE" | "LOADING" | "READY" | "ERROR"
+  >("IDLE");
+  const [rendererRetry, setRendererRetry] = useState(0);
 
   useEffect(() => {
     const handleVisibilityChange = () => {
@@ -19,6 +28,9 @@ export function App(): ReactElement {
       if (previousTime !== undefined) {
         engine.advance((time - previousTime) / 1000);
       }
+      const renderState = engine.getRenderState();
+      rendererRef.current?.consumeVisualEvents(renderState.visualEvents);
+      rendererRef.current?.render(renderState, 0);
       previousTime = time;
       frameId = requestAnimationFrame(frame);
     };
@@ -33,12 +45,63 @@ export function App(): ReactElement {
     };
   }, [engine]);
 
+  useEffect(() => {
+    if (snapshot.phase === "MENU" || !canvasHostRef.current) return;
+    let cancelled = false;
+    let resizeObserver: ResizeObserver | undefined;
+    setRendererStatus("LOADING");
+
+    void import("../render/PixiRenderer")
+      .then(({ PixiRenderer }) =>
+        PixiRenderer.create({
+          container: canvasHostRef.current!,
+          resolutionCap: 2,
+          reducedMotion: window.matchMedia("(prefers-reduced-motion: reduce)").matches,
+        }),
+      )
+      .then((renderer) => {
+        if (cancelled) {
+          renderer.destroy();
+          return;
+        }
+        rendererRef.current = renderer;
+        const resize = () => {
+          const host = canvasHostRef.current;
+          if (!host) return;
+          renderer.resize(host.clientWidth, host.clientHeight, window.devicePixelRatio);
+        };
+        resizeObserver = new ResizeObserver(resize);
+        resizeObserver.observe(canvasHostRef.current!);
+        resize();
+        setRendererStatus("READY");
+      })
+      .catch(() => {
+        if (!cancelled) setRendererStatus("ERROR");
+      });
+
+    return () => {
+      cancelled = true;
+      resizeObserver?.disconnect();
+      rendererRef.current?.destroy();
+      rendererRef.current = undefined;
+    };
+  }, [rendererRetry, snapshot.phase]);
+
   if (snapshot.phase !== "MENU") {
     return (
-      <main className="app-shell">
-        <section className="run-shell" aria-label="Expedition in progress">
-          <p className="eyebrow">EXPEDITION TIMER</p>
-          <h1>{Math.ceil(snapshot.timeRemainingSeconds)}</h1>
+      <main className="run-screen">
+        <div className="game-stage" ref={canvasHostRef} />
+        {rendererStatus === "LOADING" && (
+          <p className="loading-status" role="status">INITIALIZING MINE…</p>
+        )}
+        {rendererStatus === "ERROR" && (
+          <ErrorScreen
+            message="The graphics renderer could not start."
+            onRetry={() => setRendererRetry((value) => value + 1)}
+          />
+        )}
+        <HUD snapshot={snapshot} />
+        <section className="run-controls" aria-label="Expedition controls">
           <button
             className="secondary-button"
             onClick={() =>

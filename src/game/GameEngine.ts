@@ -2,6 +2,9 @@ import { BALANCE } from "../data/balance";
 import { BLOCK_DEFINITIONS } from "../data/blocks";
 import { BreakPipeline } from "../combat/BreakPipeline";
 import { DamageSystem } from "../combat/DamageSystem";
+import { ExplosionSystem } from "../combat/ExplosionSystem";
+import { LightningSystem } from "../combat/LightningSystem";
+import { DroneSystem, type DroneRenderState } from "../abilities/DroneSystem";
 import { MiningSystem } from "../player/MiningSystem";
 import { PlayerSystem } from "../player/PlayerSystem";
 import { ChunkManager } from "../world/ChunkManager";
@@ -41,6 +44,7 @@ export interface EngineRenderState {
   biome: BiomeId;
   player: PlayerRenderState;
   blocks: readonly BlockRenderState[];
+  drones: readonly DroneRenderState[];
   visualEvents: readonly VisualEvent[];
 }
 
@@ -88,6 +92,9 @@ export class GameEngine {
   #damage: DamageSystem | undefined;
   #upgrades: UpgradeManager | undefined;
   readonly #breakPipeline = new BreakPipeline();
+  #explosions: ExplosionSystem | undefined;
+  readonly #lightning = new LightningSystem();
+  readonly #drones = new DroneSystem();
   #input = { moveX: 0, moveY: 0, abilityPressed: false };
   #visualEvents: VisualEvent[] = [];
   #uiPublishAccumulator = 0;
@@ -138,6 +145,9 @@ export class GameEngine {
         this.#damage = new DamageSystem(
           this.#world,
           new SeededRng(this.#seed).fork("damage"),
+        );
+        this.#explosions = new ExplosionSystem(
+          new SeededRng(this.#seed).fork("explosions"),
         );
         this.#upgrades = new UpgradeManager(
           RUN_UPGRADES,
@@ -270,6 +280,7 @@ export class GameEngine {
         }),
       }),
       blocks: Object.freeze(blocks),
+      drones: Object.freeze([...this.#drones.getRenderState()]),
       visualEvents: Object.freeze([...this.#visualEvents]),
     });
   }
@@ -309,8 +320,9 @@ export class GameEngine {
         thunderGod: false,
         droneArmy: false,
       };
+      this.#drones.syncBuild(this.#upgrades?.getBuild() ?? {});
       const playerStep = this.#player.step(dt, this.#input, this.#world);
-      const damageRequests = this.#mining.step(
+      const miningRequests = this.#mining.step(
         dt,
         playerStep.miningTarget,
         {
@@ -321,6 +333,33 @@ export class GameEngine {
         },
       );
 
+      const activeBlocks = this.#world
+        .getActiveChunks()
+        .flatMap((chunk) => chunk.blocks)
+        .filter((block): block is NonNullable<typeof block> => block !== null);
+      const playerPosition = this.#player.getState().position;
+      const droneRequests = this.#drones.step(dt, {
+        blocks: activeBlocks,
+        playerPosition: {
+          x: playerPosition.x / BALANCE.tileSize,
+          y: playerPosition.y / BALANCE.tileSize,
+        },
+      });
+      const lightningRequests = this.#lightning.processTick({
+        blocks: activeBlocks,
+      });
+      const explosionBreaks =
+        this.#explosions?.processTick({
+          blocks: activeBlocks,
+          applyDamage: (request) => this.#damage?.apply(request),
+        }) ?? [];
+      explosionBreaks.forEach((request) => this.#breakPipeline.enqueue(request));
+      const damageRequests = [
+        ...miningRequests,
+        ...droneRequests,
+        ...lightningRequests,
+      ];
+
       for (const request of damageRequests) {
         const result = this.#damage.apply(request);
         if (result.hit) {
@@ -329,6 +368,19 @@ export class GameEngine {
             position: result.position,
             critical: result.critical,
           });
+        }
+        if (result.critical) {
+          this.#lightning.enqueueFromCritical(
+            {
+              critical: true,
+              position: {
+                x: request.target.tileX,
+                y: request.target.tileY,
+              },
+            },
+            stats,
+            result.chainDepth,
+          );
         }
         if (result.destroyedBlock) {
           this.#breakPipeline.enqueue({
@@ -349,10 +401,15 @@ export class GameEngine {
               },
               color: BLOCK_DEFINITIONS[request.block.type].color,
             });
+          } else if (event === "ON_BREAK_ENQUEUED") {
+            this.#explosions?.maybeEnqueueOnBreak(
+              request.block,
+              stats,
+              request.chainDepth,
+            );
           }
         },
       });
-      const playerPosition = this.#player.getState().position;
       this.#world.updateActiveSet(playerPosition);
       levelProgress = this.#upgrades?.addXp(breakResult.xpAwarded);
       this.#setSnapshot({

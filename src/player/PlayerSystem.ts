@@ -31,6 +31,10 @@ export class PlayerSystem {
     };
   }
 
+  setMoveSpeed(moveSpeed: number): void {
+    this.#state.moveSpeed = Math.max(0, moveSpeed);
+  }
+
   step(
     dt: number,
     input: InputSnapshot,

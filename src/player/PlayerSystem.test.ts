@@ -31,6 +31,20 @@ describe("PlayerSystem", () => {
     expect(result.miningTarget).toBeNull();
   });
 
+  it("applies a runtime movement-speed modifier", () => {
+    const { world, position } = worldAndRoute(2);
+    const player = new PlayerSystem({ position, moveSpeed: 100, radius: 10 });
+
+    player.setMoveSpeed(120);
+    player.step(
+      0.01,
+      { moveX: 0, moveY: -1, abilityPressed: false },
+      world,
+    );
+
+    expect(player.getState().position.y).toBeCloseTo(position.y - 1.2, 8);
+  });
+
   it("clamps at a block, returns it as mining target, then resumes after destruction", () => {
     const { world, position } = worldAndRoute(3);
     const player = new PlayerSystem({ position, moveSpeed: 100, radius: 10 });

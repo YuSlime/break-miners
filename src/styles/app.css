@@ -219,6 +219,27 @@ h1 {
   backdrop-filter: blur(10px);
 }
 
+.break-time-banner {
+  position: absolute;
+  top: max(76px, calc(env(safe-area-inset-top) + 62px));
+  left: 50%;
+  padding: 9px 18px;
+  border: 1px solid rgba(255, 211, 90, 0.75);
+  border-radius: 999px;
+  color: #241200;
+  background: linear-gradient(90deg, var(--color-orange), var(--color-gold));
+  box-shadow: 0 0 30px rgba(255, 211, 90, 0.45);
+  font-size: 0.82rem;
+  font-weight: 950;
+  letter-spacing: 0.14em;
+  transform: translateX(-50%);
+}
+
+.break-time-banner strong {
+  margin-left: 8px;
+  font-variant-numeric: tabular-nums;
+}
+
 .hud-depth {
   top: max(14px, env(safe-area-inset-top));
   left: 50%;

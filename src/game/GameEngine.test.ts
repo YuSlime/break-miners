@@ -144,4 +144,26 @@ describe("GameEngine clock", () => {
     engine.dispatch({ type: "SELECT_UPGRADE", upgradeId: "power_drill" });
     expect(engine.getSnapshot().phase).toBe("RESULT");
   });
+
+  it("does not start BREAK TIME when the timer expires on the threshold step", () => {
+    const engine = new GameEngine({
+      seed: 1,
+      startingBreakGauge: 99,
+      runDurationSeconds: 9 / 60,
+    });
+    engine.dispatch({ type: "START_RUN" });
+    engine.dispatch({
+      type: "SET_INPUT",
+      input: { moveX: 1, moveY: 0, abilityPressed: false },
+    });
+
+    for (let step = 0; step < 9; step += 1) engine.advance(1 / 60);
+
+    expect(engine.getSnapshot()).toMatchObject({
+      phase: "RESULT",
+      timeRemainingSeconds: 0,
+      breakGauge: 0,
+      breakTimeRemainingSeconds: 0,
+    });
+  });
 });

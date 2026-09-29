@@ -5,6 +5,8 @@ import { DamageSystem } from "../combat/DamageSystem";
 import { ExplosionSystem } from "../combat/ExplosionSystem";
 import { LightningSystem } from "../combat/LightningSystem";
 import { DroneSystem, type DroneRenderState } from "../abilities/DroneSystem";
+import { BreakTimeSystem } from "../abilities/BreakTimeSystem";
+import { ComboSystem } from "../abilities/ComboSystem";
 import { MiningSystem } from "../player/MiningSystem";
 import { PlayerSystem } from "../player/PlayerSystem";
 import { ChunkManager } from "../world/ChunkManager";
@@ -22,6 +24,7 @@ export interface GameEngineOptions {
   runDurationSeconds?: number;
   now?: () => number;
   startingXp?: number;
+  startingBreakGauge?: number;
 }
 
 export interface PlayerRenderState {
@@ -82,6 +85,7 @@ const BASE_RUN_STATS: BaseRunStats = {
 export class GameEngine {
   readonly #runDurationSeconds: number;
   readonly #startingXp: number;
+  readonly #startingBreakGauge: number;
   readonly #loop: FixedStepLoop;
   readonly #listeners = new Set<() => void>();
   #seed: number | string;
@@ -95,6 +99,8 @@ export class GameEngine {
   #explosions: ExplosionSystem | undefined;
   readonly #lightning = new LightningSystem();
   readonly #drones = new DroneSystem();
+  readonly #combo = new ComboSystem();
+  #breakTime: BreakTimeSystem;
   #input = { moveX: 0, moveY: 0, abilityPressed: false };
   #visualEvents: VisualEvent[] = [];
   #uiPublishAccumulator = 0;
@@ -104,6 +110,11 @@ export class GameEngine {
     this.#runDurationSeconds =
       options.runDurationSeconds ?? BALANCE.runDurationSeconds;
     this.#startingXp = Math.max(0, options.startingXp ?? 0);
+    this.#startingBreakGauge = Math.max(
+      0,
+      Math.min(100, options.startingBreakGauge ?? 0),
+    );
+    this.#breakTime = new BreakTimeSystem(this.#startingBreakGauge);
     this.#seed = options.seed ?? Math.floor((options.now ?? Date.now)());
     this.#snapshot = Object.freeze({
       ...INITIAL_SNAPSHOT,
@@ -155,6 +166,8 @@ export class GameEngine {
         );
         const startingProgress = this.#upgrades.addXp(this.#startingXp);
         this.#breakPipeline.clear();
+        this.#combo.reset();
+        this.#breakTime = new BreakTimeSystem(this.#startingBreakGauge);
         this.#mining.resetTarget();
         this.#input = { moveX: 0, moveY: 0, abilityPressed: false };
         this.#visualEvents = [];
@@ -166,6 +179,7 @@ export class GameEngine {
           xp: startingProgress.xp,
           xpRequired: startingProgress.xpRequired,
           rerollsRemaining: 1,
+          breakGauge: this.#startingBreakGauge,
         });
         this.#loop.reset();
         this.#publish();
@@ -306,8 +320,11 @@ export class GameEngine {
 
     this.#visualEvents = [];
     let levelProgress: LevelProgressResult | undefined;
+    this.#combo.step(dt);
+    const breakTimeStep = this.#breakTime.step(dt);
+    if (breakTimeStep.ended) this.#visualEvents.push({ type: "BREAK_TIME_END" });
     if (this.#world && this.#player && this.#damage) {
-      const stats = this.#upgrades?.getDerivedStats(BASE_RUN_STATS) ?? {
+      const derivedStats = this.#upgrades?.getDerivedStats(BASE_RUN_STATS) ?? {
         ...BASE_RUN_STATS,
         piercingChance: 0,
         multiBombChance: 0,
@@ -320,7 +337,19 @@ export class GameEngine {
         thunderGod: false,
         droneArmy: false,
       };
+      const breakTimeModifiers = this.#breakTime.getModifiers();
+      const stats = {
+        ...derivedStats,
+        miningSpeedMultiplier:
+          derivedStats.miningSpeedMultiplier *
+          breakTimeModifiers.miningSpeedMultiplier,
+        moveSpeedMultiplier:
+          derivedStats.moveSpeedMultiplier * breakTimeModifiers.moveSpeedMultiplier,
+        explosionChance:
+          derivedStats.explosionChance + breakTimeModifiers.explosionChanceBonus,
+      };
       this.#drones.syncBuild(this.#upgrades?.getBuild() ?? {});
+      this.#player.setMoveSpeed(100 * stats.moveSpeedMultiplier);
       const playerStep = this.#player.step(dt, this.#input, this.#world);
       const miningRequests = this.#mining.step(
         dt,
@@ -392,7 +421,16 @@ export class GameEngine {
 
       const breakResult = this.#breakPipeline.processTick({
         emit: (event, request) => {
-          if (event === "VISUAL_EVENT_EMITTED") {
+          if (event === "BLOCK_DESTROYED") {
+            const comboResult = this.#combo.onBreak();
+            comboResult.milestones.forEach((combo) => {
+              this.#visualEvents.push({ type: "COMBO_MILESTONE", combo });
+            });
+            const breakTimeResult = this.#breakTime.onBreak(request.block.type);
+            if (breakTimeResult.started) {
+              this.#visualEvents.push({ type: "BREAK_TIME_START" });
+            }
+          } else if (event === "VISUAL_EVENT_EMITTED") {
             this.#visualEvents.push({
               type: "BLOCK_BREAK",
               position: {
@@ -418,12 +456,15 @@ export class GameEngine {
         level: levelProgress?.level ?? this.#snapshot.level,
         xp: levelProgress?.xp ?? this.#snapshot.xp + breakResult.xpAwarded,
         xpRequired: levelProgress?.xpRequired ?? this.#snapshot.xpRequired,
-        runCoins: this.#snapshot.runCoins + breakResult.runCoinsAwarded,
-        combo: this.#snapshot.combo + breakResult.processed,
-        breakGauge: Math.min(
-          100,
-          this.#snapshot.breakGauge + breakResult.breakGaugeAwarded,
-        ),
+        runCoins:
+          this.#snapshot.runCoins +
+          Math.round(
+            breakResult.runCoinsAwarded *
+              this.#breakTime.getModifiers().rewardMultiplier,
+          ),
+        combo: Math.floor(this.#combo.getState().combo),
+        breakGauge: this.#breakTime.getState().gauge,
+        breakTimeRemainingSeconds: this.#breakTime.getState().remainingSeconds,
       });
     }
 
@@ -432,6 +473,12 @@ export class GameEngine {
       remainingAfterStep <= 1e-9 ? 0 : remainingAfterStep;
     let phase: UISnapshot["phase"] =
       timeRemainingSeconds === 0 ? "RESULT" : "RUNNING";
+    if (phase === "RESULT") {
+      this.#breakTime.cancel();
+      this.#visualEvents = this.#visualEvents.filter(
+        (event) => event.type !== "BREAK_TIME_START",
+      );
+    }
     let upgradeChoices = this.#snapshot.upgradeChoices;
     let rerollsRemaining = this.#snapshot.rerollsRemaining;
     if (phase !== "RESULT" && levelProgress?.leveledUp && this.#upgrades) {
@@ -448,6 +495,9 @@ export class GameEngine {
       timeRemainingSeconds,
       upgradeChoices: phase === "RESULT" ? [] : upgradeChoices,
       rerollsRemaining,
+      combo: Math.floor(this.#combo.getState().combo),
+      breakGauge: this.#breakTime.getState().gauge,
+      breakTimeRemainingSeconds: this.#breakTime.getState().remainingSeconds,
     });
 
     this.#uiPublishAccumulator += dt;

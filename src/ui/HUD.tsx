@@ -15,6 +15,11 @@ export function formatTimer(seconds: number): string {
 export function HUD({ snapshot }: HUDProps): ReactElement {
   return (
     <div className="hud" aria-label="Expedition status">
+      {snapshot.breakTimeRemainingSeconds > 0 ? (
+        <div className="break-time-banner" role="status">
+          BREAK TIME <strong>{snapshot.breakTimeRemainingSeconds.toFixed(1)}s</strong>
+        </div>
+      ) : null}
       <section className="hud-panel hud-depth" aria-label="Depth and time">
         <strong>{snapshot.depthMeters}m</strong>
         <time>{formatTimer(snapshot.timeRemainingSeconds)}</time>

@@ -37,6 +37,16 @@ describe("HUD", () => {
 
     expect(screen.queryByLabelText(/block health/i)).not.toBeInTheDocument();
   });
+
+  it("announces active BREAK TIME with its remaining duration", () => {
+    render(
+      <HUD
+        snapshot={{ ...snapshot, breakGauge: 100, breakTimeRemainingSeconds: 7.5 }}
+      />,
+    );
+
+    expect(screen.getByRole("status")).toHaveTextContent("BREAK TIME 7.5s");
+  });
 });
 
 describe("UpgradeModal", () => {

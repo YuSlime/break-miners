@@ -174,6 +174,8 @@ export class PixiRenderer {
       } else if (event.type === "CORE_GATE_DESTROYED") {
         this.#spawnRing(event.position, 0xffd35a, 42);
         this.#camera.requestShake(12 * (this.#quality.cameraShakePercent / 100));
+      } else if (event.type === "BREAK_TIME_START") {
+        this.#camera.requestShake(8 * (this.#quality.cameraShakePercent / 100));
       }
     }
   }

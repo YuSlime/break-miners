@@ -2,6 +2,10 @@
 
 BREAK MINERS is a deterministic React + PixiJS vertical slice of an eight-minute mining roguelite. Hold a movement direction to drill into blocks, form a run build from level-up choices, trigger chain reactions and BREAK TIME, destroy Core Gates, then convert the run into permanent Garage progression.
 
+## Play online
+
+[Play BREAK MINERS in your browser](https://yuslime.github.io/break-miners/)
+
 ## Requirements
 
 - Node.js 22 or newer
